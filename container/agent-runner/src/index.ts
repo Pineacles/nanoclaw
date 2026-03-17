@@ -27,6 +27,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  systemInstruction?: string;
 }
 
 interface ContainerOutput {
@@ -34,6 +35,7 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  toolUse?: { tool: string; target?: string };
 }
 
 interface SessionEntry {
@@ -115,6 +117,12 @@ function writeOutput(output: ContainerOutput): void {
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+function extractFilename(filePath: string | undefined): string | undefined {
+  if (!filePath) return undefined;
+  const parts = filePath.split('/');
+  return parts[parts.length - 1];
 }
 
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
@@ -366,12 +374,27 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
+  // Build system prompt appendix from global CLAUDE.md and per-channel system instructions
+  const systemAppendParts: string[] = [];
+
+  // Global CLAUDE.md (shared across all non-main groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+    systemAppendParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
   }
+
+  // Per-channel system instruction (passed from host or read from group folder)
+  if (containerInput.systemInstruction) {
+    systemAppendParts.push(containerInput.systemInstruction);
+  }
+  const groupSystemPromptPath = '/workspace/group/.system-prompt';
+  if (fs.existsSync(groupSystemPromptPath)) {
+    systemAppendParts.push(fs.readFileSync(groupSystemPromptPath, 'utf-8'));
+  }
+
+  const systemAppend = systemAppendParts.length > 0
+    ? systemAppendParts.join('\n\n')
+    : undefined;
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
@@ -396,8 +419,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
         : undefined,
       allowedTools: [
         'Bash',
@@ -435,6 +458,40 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Emit tool use events for real-time status in the UI
+      const msg = message as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } };
+      if (msg.message?.content) {
+        for (const block of msg.message.content) {
+          if (block.type === 'tool_use' && block.name) {
+            const tool = block.name;
+            const input = block.input || {};
+            let target: string | undefined;
+
+            // Extract meaningful target from tool input
+            if (tool === 'Read' || tool === 'Write' || tool === 'Edit') {
+              target = extractFilename(input.file_path as string | undefined);
+            } else if (tool === 'Glob') {
+              target = input.pattern as string | undefined;
+            } else if (tool === 'Grep') {
+              target = input.pattern as string | undefined;
+            } else if (tool === 'WebSearch') {
+              target = input.query as string | undefined;
+            } else if (tool === 'WebFetch') {
+              target = input.url as string | undefined;
+            } else if (tool === 'Bash') {
+              const cmd = input.command as string | undefined;
+              target = cmd ? cmd.slice(0, 60) : undefined;
+            }
+
+            writeOutput({
+              status: 'success',
+              result: null,
+              toolUse: { tool, target },
+            });
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -449,7 +506,14 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
+      let textResult = 'result' in message ? (message as { result?: string }).result : null;
+      // Strip character name prefix if present (from prefill nudge)
+      if (textResult && containerInput.assistantName) {
+        const prefix = `${containerInput.assistantName}: `;
+        if (textResult.startsWith(prefix)) {
+          textResult = textResult.slice(prefix.length);
+        }
+      }
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
@@ -495,6 +559,9 @@ async function main(): Promise<void> {
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
   // Build initial prompt (drain any pending IPC messages too)
+  // Check if this group uses a character persona (has .system-prompt file)
+  const hasCharacterPersona = fs.existsSync('/workspace/group/.system-prompt');
+
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
@@ -505,13 +572,18 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // For character persona groups, nudge the model to respond in character
+  const characterPrefill = hasCharacterPersona && containerInput.assistantName
+    ? `\n\n[Respond in character as ${containerInput.assistantName}. Begin your response directly — no preamble, no "as an AI" disclaimers.]`
+    : '';
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(prompt + characterPrefill, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -540,7 +612,7 @@ async function main(): Promise<void> {
       }
 
       log(`Got new message (${nextMessage.length} chars), starting new query`);
-      prompt = nextMessage;
+      prompt = nextMessage; // characterPrefill is appended at the runQuery call site
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

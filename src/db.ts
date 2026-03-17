@@ -139,6 +139,49 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // Web sessions table for multiple chat sessions
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS web_sessions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  // Add session_id column to messages (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN session_id TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
+  // Always backfill: ensure no web messages have NULL session_id
+  {
+    const now = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO web_sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run('default', 'Chat 1', now, now);
+    database.exec(
+      `UPDATE messages SET session_id = 'default' WHERE chat_jid = 'web:seyoung' AND session_id IS NULL`,
+    );
+  }
+
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_session_id ON messages(session_id)`,
+  );
+
+  // Add mood column to messages (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN mood TEXT DEFAULT 'chill'`,
+    );
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(): void {
@@ -260,9 +303,11 @@ export function setLastGroupSync(): void {
  * Store a message with full content.
  * Only call this for registered groups where message history is needed.
  */
-export function storeMessage(msg: NewMessage): void {
+export function storeMessage(
+  msg: NewMessage & { session_id?: string },
+): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, session_id, mood) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -272,6 +317,8 @@ export function storeMessage(msg: NewMessage): void {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.session_id ?? null,
+    msg.mood ?? 'chill',
   );
 }
 
@@ -287,9 +334,11 @@ export function storeMessageDirect(msg: {
   timestamp: string;
   is_from_me: boolean;
   is_bot_message?: boolean;
+  session_id?: string;
+  mood?: string;
 }): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, session_id, mood) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -299,6 +348,8 @@ export function storeMessageDirect(msg: {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.session_id ?? null,
+    msg.mood ?? 'chill',
   );
 }
 
@@ -493,6 +544,130 @@ export function logTaskRun(log: TaskRunLog): void {
     log.status,
     log.result,
     log.error,
+  );
+}
+
+/**
+ * Get all messages for a chat (including bot messages).
+ * Used for chat history display where both sides of the conversation are needed.
+ */
+export function getChatMessages(
+  chatJid: string,
+  limit: number = 100,
+  sessionId?: string,
+): Array<{
+  id: string;
+  sender_name: string;
+  content: string;
+  timestamp: string;
+  is_bot_message: number;
+  mood: string;
+}> {
+  const sessionFilter = sessionId ? ' AND session_id = ?' : '';
+  const sql = `
+    SELECT * FROM (
+      SELECT id, sender_name, content, timestamp, is_bot_message, COALESCE(mood, 'chill') as mood
+      FROM messages
+      WHERE chat_jid = ? AND content != '' AND content IS NOT NULL${sessionFilter}
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+  const params = sessionId ? [chatJid, sessionId, limit] : [chatJid, limit];
+  return db.prepare(sql).all(...params) as Array<{
+    id: string;
+    sender_name: string;
+    content: string;
+    timestamp: string;
+    is_bot_message: number;
+    mood: string;
+  }>;
+}
+
+// --- Message delete accessors ---
+
+export function getMessageById(
+  id: string,
+  chatJid: string,
+): {
+  id: string;
+  timestamp: string;
+  is_bot_message: number;
+  session_id: string | null;
+} | undefined {
+  return db
+    .prepare(
+      `SELECT id, timestamp, is_bot_message, session_id FROM messages WHERE id = ? AND chat_jid = ?`,
+    )
+    .get(id, chatJid) as
+    | { id: string; timestamp: string; is_bot_message: number; session_id: string | null }
+    | undefined;
+}
+
+export function getNextBotMessage(
+  chatJid: string,
+  afterTimestamp: string,
+  sessionId?: string | null,
+): { id: string } | undefined {
+  const sessionFilter = sessionId ? ' AND session_id = ?' : '';
+  const sql = `SELECT id FROM messages WHERE chat_jid = ? AND timestamp > ? AND is_bot_message = 1${sessionFilter} ORDER BY timestamp LIMIT 1`;
+  const params = sessionId ? [chatJid, afterTimestamp, sessionId] : [chatJid, afterTimestamp];
+  return db.prepare(sql).get(...params) as { id: string } | undefined;
+}
+
+export function deleteMessage(id: string, chatJid: string): void {
+  db.prepare('DELETE FROM messages WHERE id = ? AND chat_jid = ?').run(
+    id,
+    chatJid,
+  );
+}
+
+// --- Web session accessors ---
+
+export interface WebSession {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function createWebSession(id: string, name: string): WebSession {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO web_sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+  ).run(id, name, now, now);
+  return { id, name, created_at: now, updated_at: now };
+}
+
+export function getWebSessionById(id: string): WebSession | undefined {
+  return db
+    .prepare('SELECT * FROM web_sessions WHERE id = ?')
+    .get(id) as WebSession | undefined;
+}
+
+export function getWebSessions(): WebSession[] {
+  return db
+    .prepare('SELECT * FROM web_sessions ORDER BY updated_at DESC')
+    .all() as WebSession[];
+}
+
+export function updateWebSession(id: string, name: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    'UPDATE web_sessions SET name = ?, updated_at = ? WHERE id = ?',
+  ).run(name, now, id);
+}
+
+export function deleteWebSession(id: string): void {
+  db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM web_sessions WHERE id = ?').run(id);
+}
+
+export function touchWebSession(id: string): void {
+  const now = new Date().toISOString();
+  db.prepare('UPDATE web_sessions SET updated_at = ? WHERE id = ?').run(
+    now,
+    id,
   );
 }
 

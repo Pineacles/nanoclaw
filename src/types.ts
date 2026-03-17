@@ -51,6 +51,8 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  session_id?: string;
+  mood?: string;
 }
 
 export interface ScheduledTask {
@@ -88,8 +90,12 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  // Optional: real-time tool use status. Channels that support it show what the agent is doing.
+  setToolUse?(jid: string, tool: string, target?: string): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: override SDK session key (e.g. per-web-session isolation).
+  getSessionKey?(groupFolder: string): string;
 }
 
 // Callback type that channels use to deliver inbound messages

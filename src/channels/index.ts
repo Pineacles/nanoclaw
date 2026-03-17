@@ -9,4 +9,6 @@
 
 // telegram
 
+import './web/index.js';
+
 // whatsapp

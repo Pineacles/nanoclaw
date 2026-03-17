@@ -213,6 +213,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let outputSentToUser = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
+    // Tool use events — forward to channel for real-time status
+    if (result.toolUse) {
+      logger.debug({ tool: result.toolUse.tool, target: result.toolUse.target }, 'Forwarding tool use to channel');
+      await channel.setToolUse?.(chatJid, result.toolUse.tool, result.toolUse.target);
+    }
+
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -230,14 +236,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       resetIdleTimer();
     }
 
-    if (result.status === 'success') {
+    if (result.status === 'success' && !result.toolUse) {
       queue.notifyIdle(chatJid);
     }
 
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, channel);
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -270,9 +276,11 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  channel?: Channel,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  const sessionKey = channel?.getSessionKey?.(group.folder) ?? group.folder;
+  const sessionId = sessions[sessionKey];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -303,8 +311,8 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          sessions[sessionKey] = output.newSessionId;
+          setSession(sessionKey, output.newSessionId);
         }
         await onOutput(output);
       }
@@ -327,8 +335,8 @@ async function runAgent(
     );
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      sessions[sessionKey] = output.newSessionId;
+      setSession(sessionKey, output.newSessionId);
     }
 
     if (output.status === 'error') {

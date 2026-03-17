@@ -41,6 +41,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  systemInstruction?: string;
 }
 
 export interface ContainerOutput {
@@ -48,6 +49,7 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  toolUse?: { tool: string; target?: string };
 }
 
 interface VolumeMount {
