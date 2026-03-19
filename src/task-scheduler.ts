@@ -238,6 +238,127 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
+/**
+ * Run a task immediately (test run or ad-hoc execution).
+ * Does NOT update next_run or mark once-tasks as completed.
+ */
+export async function runTaskNow(
+  taskId: string,
+  deps: SchedulerDependencies,
+): Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }> {
+  const task = getTaskById(taskId);
+  if (!task) {
+    return { status: 'error', result: null, error: 'Task not found', duration_ms: 0 };
+  }
+  if (task.status !== 'active' && task.status !== 'draft') {
+    return { status: 'error', result: null, error: `Task status is '${task.status}', must be 'active' or 'draft'`, duration_ms: 0 };
+  }
+
+  const startTime = Date.now();
+  let groupDir: string;
+  try {
+    groupDir = resolveGroupFolderPath(task.group_folder);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: 'error', result: null, error, duration_ms: Date.now() - startTime };
+  }
+  fs.mkdirSync(groupDir, { recursive: true });
+
+  const groups = deps.registeredGroups();
+  const group = Object.values(groups).find((g) => g.folder === task.group_folder);
+  if (!group) {
+    return { status: 'error', result: null, error: `Group not found: ${task.group_folder}`, duration_ms: Date.now() - startTime };
+  }
+
+  const isMain = group.isMain === true;
+  const tasks = getAllTasks();
+  writeTasksSnapshot(
+    task.group_folder,
+    isMain,
+    tasks.map((t) => ({
+      id: t.id,
+      groupFolder: t.group_folder,
+      prompt: t.prompt,
+      schedule_type: t.schedule_type,
+      schedule_value: t.schedule_value,
+      status: t.status,
+      next_run: t.next_run,
+    })),
+  );
+
+  let result: string | null = null;
+  let error: string | null = null;
+
+  const sessions = deps.getSessions();
+  const sessionId = task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+
+  const TASK_CLOSE_DELAY_MS = 10000;
+  let closeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleClose = () => {
+    if (closeTimer) return;
+    closeTimer = setTimeout(() => {
+      deps.queue.closeStdin(task.chat_jid);
+    }, TASK_CLOSE_DELAY_MS);
+  };
+
+  try {
+    const output = await runContainerAgent(
+      group,
+      {
+        prompt: task.prompt,
+        sessionId,
+        groupFolder: task.group_folder,
+        chatJid: task.chat_jid,
+        isMain,
+        isScheduledTask: true,
+        assistantName: ASSISTANT_NAME,
+      },
+      (proc, containerName) =>
+        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+      async (streamedOutput: ContainerOutput) => {
+        if (streamedOutput.result) {
+          result = streamedOutput.result;
+          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          scheduleClose();
+        }
+        if (streamedOutput.status === 'success') {
+          deps.queue.notifyIdle(task.chat_jid);
+          scheduleClose();
+        }
+        if (streamedOutput.status === 'error') {
+          error = streamedOutput.error || 'Unknown error';
+        }
+      },
+    );
+
+    if (closeTimer) clearTimeout(closeTimer);
+
+    if (output.status === 'error') {
+      error = output.error || 'Unknown error';
+    } else if (output.result) {
+      result = output.result;
+    }
+  } catch (err) {
+    if (closeTimer) clearTimeout(closeTimer);
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  const durationMs = Date.now() - startTime;
+
+  // Log the run but do NOT update next_run or mark as completed (test/ad-hoc run)
+  logTaskRun({
+    task_id: task.id,
+    run_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    status: error ? 'error' : 'success',
+    result,
+    error,
+  });
+
+  return { status: error ? 'error' : 'success', result, error, duration_ms: durationMs };
+}
+
 let schedulerRunning = false;
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {

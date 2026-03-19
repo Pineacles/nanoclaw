@@ -2,17 +2,28 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from '../../config.js';
-import { getChatMessages, setRegisteredGroup, storeChatMetadata, getTasksForGroup, createTask } from '../../db.js';
+import {
+  getChatMessages,
+  setRegisteredGroup,
+  storeChatMetadata,
+  getTasksForGroup,
+  createTask,
+} from '../../db.js';
 import { logger } from '../../logger.js';
+import { computeNextRun } from '../../task-scheduler.js';
 import crypto from 'crypto';
 import { Channel } from '../../types.js';
 import type { ChannelOpts } from '../registry.js';
 import { createWebServer, WebServer } from './web-server.js';
 
+export interface WebChannelOpts extends ChannelOpts {
+  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
+}
+
 const GROUP_JID = 'web:seyoung';
 const GROUP_FOLDER = 'seyoung';
 
-export function createWebChannel(opts: ChannelOpts): Channel | null {
+export function createWebChannel(opts: WebChannelOpts): Channel | null {
   let webServer: WebServer | null = null;
   let connected = false;
 
@@ -57,33 +68,43 @@ export function createWebChannel(opts: ChannelOpts): Channel | null {
       });
 
       // Store chat metadata
-      storeChatMetadata(GROUP_JID, new Date().toISOString(), 'Seyoung', 'web', false);
+      storeChatMetadata(
+        GROUP_JID,
+        new Date().toISOString(),
+        'Seyoung',
+        'web',
+        false,
+      );
 
       // Start web server
       webServer = createWebServer({
         onMessage: opts.onMessage,
-        getMessages: (sessionId?: string) => getChatMessages(GROUP_JID, 20, sessionId),
+        getMessages: (sessionId?: string) =>
+          getChatMessages(GROUP_JID, 20, sessionId),
+        runTaskNow: opts.runTaskNow,
       });
 
       // Create nightly mood planning task if not exists
       const existingTasks = getTasksForGroup(GROUP_FOLDER);
       const hasMoodTask = existingTasks.some(
-        (t) => t.prompt.includes('mood schedule') && t.status === 'active',
+        (t) => t.prompt.includes('mood schedule') && (t.status === 'active' || t.status === 'draft'),
       );
       if (!hasMoodTask) {
-        createTask({
+        const moodTask = {
           id: crypto.randomUUID(),
           group_folder: GROUP_FOLDER,
           chat_jid: GROUP_JID,
           prompt:
             "It's almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, commission work, lunch, bouldering or other exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.",
-          schedule_type: 'cron',
+          schedule_type: 'cron' as const,
           schedule_value: '0 23 * * *',
-          context_mode: 'group',
-          next_run: null,
-          status: 'active',
+          context_mode: 'group' as const,
+          next_run: null as string | null,
+          status: 'active' as const,
           created_at: new Date().toISOString(),
-        });
+        };
+        moodTask.next_run = computeNextRun(moodTask as Parameters<typeof computeNextRun>[0]);
+        createTask(moodTask);
         logger.info('Created nightly mood planning task for Seyoung');
       }
 
@@ -134,7 +155,11 @@ export function createWebChannel(opts: ChannelOpts): Channel | null {
       webServer.setTyping(isTyping);
     },
 
-    async setToolUse(_jid: string, tool: string, target?: string): Promise<void> {
+    async setToolUse(
+      _jid: string,
+      tool: string,
+      target?: string,
+    ): Promise<void> {
       webServer?.setToolUse(tool, target);
     },
 

@@ -6,8 +6,8 @@ import crypto from 'crypto';
 
 import { readEnvFile } from '../../env.js';
 import { logger } from '../../logger.js';
-import { storeMessage, storeMessageDirect, touchWebSession } from '../../db.js';
-import { resolveMood, applyMoodTag } from './mood.js';
+import { storeMessage, storeMessageDirect, touchWebSession, getWebSessions, getBotMessageCount, updateWebSession, getChatMessages } from '../../db.js';
+import { resolveMood, applyMoodTag, stripMoodTags } from './mood.js';
 import { verifyAuth } from './auth.js';
 import { handleApiRoute, ApiDeps } from './api-routes.js';
 import type { ClientMessage, ServerMessage } from './types.js';
@@ -31,6 +31,7 @@ const GROUP_JID = 'web:seyoung';
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
   getMessages: (sessionId?: string) => ReturnType<ApiDeps['getMessages']>;
+  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
 }
 
 export interface WebServer {
@@ -43,6 +44,51 @@ export interface WebServer {
   close(): void;
 }
 
+async function generateSessionTitle(
+  sessionId: string,
+  botResponse: string,
+  broadcast: (msg: ServerMessage) => void,
+): Promise<void> {
+  try {
+    // Get the first user message in this session
+    const messages = getChatMessages(GROUP_JID, 5, sessionId);
+    const firstUserMsg = messages.find((m) => m.is_bot_message === 0);
+    if (!firstUserMsg) return;
+
+    const userText = firstUserMsg.content.replace(/^\[System: [^\]]+\]\n/, '');
+
+    const prompt = `Generate a 3-5 word title for this conversation. Return ONLY the title, nothing else. No quotes, no punctuation.\n\nUser: ${userText.slice(0, 300)}\nAssistant: ${botResponse.slice(0, 300)}`;
+
+    const { spawn } = await import('child_process');
+
+    const stdout = await new Promise<string>((resolve, reject) => {
+      const proc = spawn('claude', ['--print', '--model', 'claude-haiku-4-5-20251001'], {
+        timeout: 30000,
+        env: { ...process.env, PATH: process.env.PATH + ':/home/pineappleles/.nvm/versions/node/v22.22.1/bin' },
+      });
+      let out = '';
+      let err = '';
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0) resolve(out);
+        else reject(new Error(`claude exit ${code}: ${err}`));
+      });
+      proc.on('error', reject);
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    });
+
+    const title = stdout.trim();
+    if (!title || title.length > 60) return;
+
+    updateWebSession(sessionId, title);
+    broadcast({ type: 'session_renamed', sessionId, name: title });
+  } catch (err) {
+    logger.error({ err }, 'Failed to generate session title');
+  }
+}
+
 export function createWebServer(opts: WebServerOpts): WebServer {
   const env = readEnvFile(['WEB_PORT']);
   const port = parseInt(env.WEB_PORT || '3003', 10);
@@ -51,13 +97,22 @@ export function createWebServer(opts: WebServerOpts): WebServer {
   const staticDir = path.resolve(process.cwd(), 'web-ui', 'dist');
 
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    const url = new URL(
+      req.url || '/',
+      `http://${req.headers.host || 'localhost'}`,
+    );
 
     // CORS for API routes
     if (url.pathname.startsWith('/api/')) {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader(
+        'Access-Control-Allow-Methods',
+        'GET, POST, PUT, DELETE, OPTIONS',
+      );
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization',
+      );
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -73,6 +128,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
       const handled = await handleApiRoute(req, res, url, {
         getMessages: opts.getMessages,
+        runTaskNow: opts.runTaskNow,
       });
       if (handled) return;
 
@@ -232,8 +288,16 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         currentMessageId = crypto.randomUUID();
       }
 
+      // If no session set (task-triggered), use most recently updated session
+      if (!currentSessionId) {
+        const sessions = getWebSessions();
+        if (sessions.length > 0) {
+          currentSessionId = sessions[0].id;
+        }
+      }
+
       // Always strip mood tags from displayed text so they never flash during streaming
-      const displayText = text.replace(/\[mood:\w+(?:\s+energy:\d+)?\]\s*/g, '').trim();
+      const displayText = stripMoodTags(text);
 
       broadcast({
         type: 'message',
@@ -253,6 +317,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           activity: moodNow.activity,
         });
 
+        const sessionId = currentSessionId ?? 'default';
+
         storeMessageDirect({
           id: currentMessageId,
           chat_jid: GROUP_JID,
@@ -262,9 +328,16 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           timestamp: new Date().toISOString(),
           is_from_me: true,
           is_bot_message: true,
-          session_id: currentSessionId ?? undefined,
+          session_id: sessionId,
           mood: tagMood,
         });
+
+        // Auto-name session after first bot response
+        const botCount = getBotMessageCount(GROUP_JID, sessionId);
+        if (botCount === 1) {
+          generateSessionTitle(sessionId, cleanText, broadcast);
+        }
+
         currentMessageId = null;
         currentSessionId = null;
       }
@@ -292,7 +365,10 @@ function serveStatic(
   staticDir: string,
 ): void {
   // Default to index.html for SPA routing
-  let filePath = path.join(staticDir, pathname === '/' ? 'index.html' : pathname);
+  let filePath = path.join(
+    staticDir,
+    pathname === '/' ? 'index.html' : pathname,
+  );
 
   // Security: prevent path traversal
   if (!filePath.startsWith(staticDir)) {

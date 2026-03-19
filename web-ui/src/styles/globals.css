@@ -1,0 +1,282 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #110d0c;
+    color: #fffbff;
+  }
+
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #4c4744;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #7b7471;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(29, 25, 22, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .glass-panel {
+    background: rgba(29, 25, 22, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .gradient-accent {
+    background: linear-gradient(135deg, #ff906d 0%, #ff784e 100%);
+  }
+
+  .gradient-accent-135 {
+    background: linear-gradient(135deg, #ff906d 0%, #ff784e 100%);
+  }
+
+  .signature-glow {
+    background: linear-gradient(135deg, #ff906d 0%, #ff784e 100%);
+  }
+
+  .gradient-bg {
+    background: #110d0c;
+  }
+
+  .thought-glow {
+    box-shadow: 0 0 30px rgba(255, 144, 109, 0.15);
+  }
+
+  .inner-thought-glow {
+    box-shadow: 0 0 40px -10px rgba(255, 144, 109, 0.15);
+  }
+}
+
+/* Mood blob animations */
+@keyframes dead-still {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(1px) scale(0.98); }
+}
+@keyframes gentle-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(2px); }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+@keyframes nod {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes soft-morph {
+  0%, 100% { border-radius: 50%; transform: scale(1); }
+  50% { border-radius: 58% 42% 52% 48% / 48% 54% 46% 52%; transform: scale(1.04); }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes tiny-shift {
+  0%, 100% { transform: translate(0); }
+  33% { transform: translate(-1px, 0); }
+  66% { transform: translate(1px, 0); }
+}
+@keyframes soft-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+@keyframes training-pulse {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50% { transform: scale(1.07) rotate(2deg); }
+}
+@keyframes eating-bob {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.04); }
+}
+@keyframes cry-tremble {
+  0%, 100% { transform: translateY(0) scale(1); }
+  40% { transform: translateY(1px) scale(0.97); }
+  60% { transform: translateY(-1px) scale(0.99); }
+}
+
+/* Mood aura animations */
+@keyframes aura-slow {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 0.2; transform: scale(1.08); }
+}
+@keyframes aura-focused {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.9; }
+}
+@keyframes aura-soft {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.12); }
+}
+@keyframes aura-annoy {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+}
+@keyframes aura-excite {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.15); }
+}
+
+/* Message fade-out animation */
+@keyframes messageFadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(4px); }
+}
+.message-fade-out {
+  animation: messageFadeOut 300ms ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Markdown content styles */
+.markdown-content h1 {
+  font-size: 1.6em;
+  font-weight: 800;
+  margin: 1em 0 0.5em;
+  color: #fffbff;
+  letter-spacing: -0.02em;
+  border-bottom: 1px solid #4c474420;
+  padding-bottom: 0.3em;
+}
+.markdown-content h2 {
+  font-size: 1.3em;
+  font-weight: 700;
+  margin: 0.8em 0 0.4em;
+  color: #ff906d;
+}
+.markdown-content h3 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+  color: #fffbff;
+}
+.markdown-content h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.5em 0 0.2em;
+  color: #b2a9a6;
+}
+.markdown-content p {
+  margin: 0.5em 0;
+  line-height: 1.7;
+}
+.markdown-content ul, .markdown-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.6em;
+}
+.markdown-content li {
+  margin: 0.3em 0;
+  line-height: 1.6;
+}
+.markdown-content li::marker {
+  color: #ff906d;
+}
+.markdown-content strong {
+  color: #fffbff;
+  font-weight: 700;
+}
+.markdown-content em {
+  color: #b2a9a6;
+  font-style: italic;
+}
+.markdown-content code {
+  background: #2a2522;
+  color: #ff906d;
+  padding: 0.15em 0.45em;
+  border-radius: 5px;
+  font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', monospace;
+  border: 1px solid #4c474415;
+}
+.markdown-content pre {
+  background: #110d0c;
+  border: 1px solid #4c474430;
+  border-radius: 12px;
+  padding: 1.2em;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.markdown-content pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 0.85em;
+  border: none;
+}
+.markdown-content blockquote {
+  border-left: 3px solid #ff906d;
+  padding: 0.5em 1em;
+  margin: 0.6em 0;
+  color: #b2a9a6;
+  background: #ff906d08;
+  border-radius: 0 8px 8px 0;
+}
+.markdown-content a {
+  color: #ff906d;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-content a:hover {
+  color: #ff7348;
+}
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid #4c474430;
+  margin: 1.2em 0;
+}
+.markdown-content table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+  font-size: 0.92em;
+}
+.markdown-content th, .markdown-content td {
+  border: 1px solid #4c474430;
+  padding: 0.5em 1em;
+  text-align: left;
+}
+.markdown-content th {
+  background: #1d1916;
+  font-weight: 700;
+  color: #fffbff;
+  text-transform: uppercase;
+  font-size: 0.85em;
+  letter-spacing: 0.03em;
+}
+.markdown-content tr:nth-child(even) {
+  background: #1d191640;
+}
+.markdown-content img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.5em 0;
+}

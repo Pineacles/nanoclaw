@@ -25,7 +25,10 @@ export function verifyAuth(req: IncomingMessage): boolean {
   }
 
   // Check query parameter (for WebSocket upgrade)
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const url = new URL(
+    req.url || '/',
+    `http://${req.headers.host || 'localhost'}`,
+  );
   if (url.searchParams.get('token') === token) {
     return true;
   }

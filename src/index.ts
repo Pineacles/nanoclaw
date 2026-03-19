@@ -57,7 +57,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { startSchedulerLoop } from './task-scheduler.js';
+import { runTaskNow, startSchedulerLoop, SchedulerDependencies } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -212,38 +212,54 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Tool use events — forward to channel for real-time status
-    if (result.toolUse) {
-      logger.debug({ tool: result.toolUse.tool, target: result.toolUse.target }, 'Forwarding tool use to channel');
-      await channel.setToolUse?.(chatJid, result.toolUse.tool, result.toolUse.target);
-    }
-
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Tool use events — forward to channel for real-time status
+      if (result.toolUse) {
+        logger.debug(
+          { tool: result.toolUse.tool, target: result.toolUse.target },
+          'Forwarding tool use to channel',
+        );
+        await channel.setToolUse?.(
+          chatJid,
+          result.toolUse.tool,
+          result.toolUse.target,
+        );
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success' && !result.toolUse) {
-      queue.notifyIdle(chatJid);
-    }
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  }, channel);
+      if (result.status === 'success' && !result.toolUse) {
+        queue.notifyIdle(chatJid);
+      }
+
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    channel,
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -544,8 +560,28 @@ async function main(): Promise<void> {
     }
   }
 
+  // Build scheduler deps early so runTaskNow can be passed to channels.
+  // sendMessage uses a late-binding closure over `channels` (populated below).
+  const schedulerDeps: SchedulerDependencies = {
+    registeredGroups: () => registeredGroups,
+    getSessions: () => sessions,
+    queue,
+    onProcess: (groupJid, proc, containerName, groupFolder) =>
+      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'No channel owns JID, cannot send message');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) await channel.sendMessage(jid, text);
+    },
+  };
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
+    runTaskNow: (taskId: string) => runTaskNow(taskId, schedulerDeps),
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
@@ -606,22 +642,7 @@ async function main(): Promise<void> {
   }
 
   // Start subsystems (independently of connection handler)
-  startSchedulerLoop({
-    registeredGroups: () => registeredGroups,
-    getSessions: () => sessions,
-    queue,
-    onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
-    sendMessage: async (jid, rawText) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
-      }
-      const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
-    },
-  });
+  startSchedulerLoop(schedulerDeps);
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);

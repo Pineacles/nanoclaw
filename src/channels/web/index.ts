@@ -7,5 +7,5 @@ registerChannel('web', (opts) => {
   if (!env.WEB_AUTH_TOKEN) {
     return null;
   }
-  return createWebChannel(opts);
+  return createWebChannel({ ...opts, runTaskNow: opts.runTaskNow });
 });

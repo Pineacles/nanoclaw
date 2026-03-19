@@ -176,9 +176,7 @@ function createSchema(database: Database.Database): void {
 
   // Add mood column to messages (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN mood TEXT DEFAULT 'chill'`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN mood TEXT DEFAULT 'chill'`);
   } catch {
     /* column already exists */
   }
@@ -303,9 +301,7 @@ export function setLastGroupSync(): void {
  * Store a message with full content.
  * Only call this for registered groups where message history is needed.
  */
-export function storeMessage(
-  msg: NewMessage & { session_id?: string },
-): void {
+export function storeMessage(msg: NewMessage & { session_id?: string }): void {
   db.prepare(
     `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, session_id, mood) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
@@ -547,6 +543,15 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+export function getSuccessfulRunCount(taskId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM task_run_logs WHERE task_id = ? AND status = 'success'`,
+    )
+    .get(taskId) as { cnt: number };
+  return row.cnt;
+}
+
 /**
  * Get all messages for a chat (including bot messages).
  * Used for chat history display where both sides of the conversation are needed.
@@ -589,18 +594,25 @@ export function getChatMessages(
 export function getMessageById(
   id: string,
   chatJid: string,
-): {
-  id: string;
-  timestamp: string;
-  is_bot_message: number;
-  session_id: string | null;
-} | undefined {
+):
+  | {
+      id: string;
+      timestamp: string;
+      is_bot_message: number;
+      session_id: string | null;
+    }
+  | undefined {
   return db
     .prepare(
       `SELECT id, timestamp, is_bot_message, session_id FROM messages WHERE id = ? AND chat_jid = ?`,
     )
     .get(id, chatJid) as
-    | { id: string; timestamp: string; is_bot_message: number; session_id: string | null }
+    | {
+        id: string;
+        timestamp: string;
+        is_bot_message: number;
+        session_id: string | null;
+      }
     | undefined;
 }
 
@@ -611,7 +623,9 @@ export function getNextBotMessage(
 ): { id: string } | undefined {
   const sessionFilter = sessionId ? ' AND session_id = ?' : '';
   const sql = `SELECT id FROM messages WHERE chat_jid = ? AND timestamp > ? AND is_bot_message = 1${sessionFilter} ORDER BY timestamp LIMIT 1`;
-  const params = sessionId ? [chatJid, afterTimestamp, sessionId] : [chatJid, afterTimestamp];
+  const params = sessionId
+    ? [chatJid, afterTimestamp, sessionId]
+    : [chatJid, afterTimestamp];
   return db.prepare(sql).get(...params) as { id: string } | undefined;
 }
 
@@ -640,9 +654,9 @@ export function createWebSession(id: string, name: string): WebSession {
 }
 
 export function getWebSessionById(id: string): WebSession | undefined {
-  return db
-    .prepare('SELECT * FROM web_sessions WHERE id = ?')
-    .get(id) as WebSession | undefined;
+  return db.prepare('SELECT * FROM web_sessions WHERE id = ?').get(id) as
+    | WebSession
+    | undefined;
 }
 
 export function getWebSessions(): WebSession[] {
@@ -661,6 +675,15 @@ export function updateWebSession(id: string, name: string): void {
 export function deleteWebSession(id: string): void {
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
   db.prepare('DELETE FROM web_sessions WHERE id = ?').run(id);
+}
+
+export function getBotMessageCount(chatJid: string, sessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM messages WHERE chat_jid = ? AND session_id = ? AND is_bot_message = 1`,
+    )
+    .get(chatJid, sessionId) as { cnt: number };
+  return row.cnt;
 }
 
 export function touchWebSession(id: string): void {

@@ -17,6 +17,8 @@ import {
   updateWebSession,
   deleteWebSession,
 } from '../../db.js';
+import { CronExpressionParser } from 'cron-parser';
+import { computeNextRun } from '../../task-scheduler.js';
 import { logger } from '../../logger.js';
 import { resolveMood } from './mood.js';
 
@@ -149,7 +151,11 @@ function handleMemoryRead(
   res: ServerResponse,
   filename: string,
 ): void {
-  if (!filename.endsWith('.md') || filename.includes('..') || filename.includes('/')) {
+  if (
+    !filename.endsWith('.md') ||
+    filename.includes('..') ||
+    filename.includes('/')
+  ) {
     return error(res, 'Invalid filename', 400);
   }
   const filePath = path.join(groupDir(), filename);
@@ -163,13 +169,38 @@ async function handleMemoryWrite(
   res: ServerResponse,
   filename: string,
 ): Promise<void> {
-  if (!filename.endsWith('.md') || filename.includes('..') || filename.includes('/')) {
+  if (
+    !filename.endsWith('.md') ||
+    filename.includes('..') ||
+    filename.includes('/')
+  ) {
     return error(res, 'Invalid filename', 400);
   }
   const body = JSON.parse(await readBody(req));
   const filePath = path.join(groupDir(), filename);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, body.content, 'utf-8');
+  json(res, { ok: true });
+}
+
+function handleMemoryDelete(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  filename: string,
+): void {
+  if (
+    !filename.endsWith('.md') ||
+    filename.includes('..') ||
+    filename.includes('/')
+  ) {
+    return error(res, 'Invalid filename', 400);
+  }
+  if (filename === 'CLAUDE.md') {
+    return error(res, 'Cannot delete system prompt file', 403);
+  }
+  const filePath = path.join(groupDir(), filename);
+  if (!fs.existsSync(filePath)) return error(res, 'Not found', 404);
+  fs.unlinkSync(filePath);
   json(res, { ok: true });
 }
 
@@ -203,18 +234,33 @@ async function handleTaskCreate(
   res: ServerResponse,
 ): Promise<void> {
   const body = JSON.parse(await readBody(req));
+  const scheduleType = body.schedule_type || 'once';
+
+  // Validate cron expression before creating
+  if (scheduleType === 'cron' && body.schedule_value) {
+    try {
+      CronExpressionParser.parse(body.schedule_value);
+    } catch {
+      return error(res, `Invalid cron expression: "${body.schedule_value}"`, 400);
+    }
+  }
+
   const task = {
     id: crypto.randomUUID(),
     group_folder: GROUP_FOLDER,
     chat_jid: GROUP_JID,
     prompt: body.prompt,
-    schedule_type: body.schedule_type || 'once',
+    schedule_type: scheduleType,
     schedule_value: body.schedule_value || '',
-    context_mode: body.context_mode || 'group' as const,
+    context_mode: body.context_mode || ('group' as const),
     next_run: body.next_run || null,
-    status: 'active' as const,
+    status: 'draft' as const,
     created_at: new Date().toISOString(),
   };
+  // Auto-compute next_run for cron/interval tasks if not provided
+  if (!task.next_run && task.schedule_type !== 'once') {
+    task.next_run = computeNextRun(task as Parameters<typeof computeNextRun>[0]);
+  }
   createTask(task);
   json(res, task, 201);
 }
@@ -330,7 +376,11 @@ async function handleQuickActionCreate(
       /* empty */
     }
   }
-  const action = { id: crypto.randomUUID(), label: body.label, prompt: body.prompt };
+  const action = {
+    id: crypto.randomUUID(),
+    label: body.label,
+    prompt: body.prompt,
+  };
   actions.push(action);
   fs.mkdirSync(groupDir(), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(actions, null, 2), 'utf-8');
@@ -367,6 +417,7 @@ export interface ApiDeps {
     is_bot_message: number;
     mood: string;
   }>;
+  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
 }
 
 export async function handleApiRoute(
@@ -432,6 +483,10 @@ export async function handleApiRoute(
         await handleMemoryWrite(req, res, filename);
         return true;
       }
+      if (method === 'DELETE') {
+        handleMemoryDelete(req, res, filename);
+        return true;
+      }
     }
 
     // Tasks
@@ -443,6 +498,22 @@ export async function handleApiRoute(
       await handleTaskCreate(req, res);
       return true;
     }
+    const taskRunMatch = p.match(/^\/api\/tasks\/(.+)\/run$/);
+    if (taskRunMatch && method === 'POST') {
+      const taskId = decodeURIComponent(taskRunMatch[1]);
+      if (!deps.runTaskNow) {
+        return error(res, 'Run task not available', 501), true;
+      }
+      try {
+        const result = await deps.runTaskNow(taskId);
+        json(res, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        error(res, msg, 500);
+      }
+      return true;
+    }
+
     const taskMatch = p.match(/^\/api\/tasks\/(.+)$/);
     if (taskMatch) {
       const taskId = decodeURIComponent(taskMatch[1]);

@@ -13,4 +13,5 @@ export type ServerMessage =
   | { type: 'connected' }
   | { type: 'error'; message: string }
   | { type: 'pong' }
-  | { type: 'mood'; current_mood: string; energy: number; activity: string };
+  | { type: 'mood'; current_mood: string; energy: number; activity: string }
+  | { type: 'session_renamed'; sessionId: string; name: string };

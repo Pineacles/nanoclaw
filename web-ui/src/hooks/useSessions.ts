@@ -1,0 +1,108 @@
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../lib/api';
+
+export interface WebSession {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useSessions(authenticated: boolean) {
+  const [sessions, setSessions] = useState<WebSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState('default');
+
+  // Load sessions on mount
+  useEffect(() => {
+    if (!authenticated) return;
+    api
+      .get<WebSession[]>('/api/sessions')
+      .then((data) => {
+        if (data.length === 0) {
+          // Auto-create default session
+          api
+            .post<WebSession>('/api/sessions', { name: 'Chat 1' })
+            .then((s) => {
+              setSessions([s]);
+              setActiveSessionId(s.id);
+            });
+        } else {
+          setSessions(data);
+          // If active session no longer exists, switch to first
+          if (!data.find((s) => s.id === activeSessionId)) {
+            setActiveSessionId(data[0].id);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [authenticated]);
+
+  const createSession = useCallback(async (name?: string) => {
+    const sessionName = name || `Chat ${Date.now().toString(36)}`;
+    try {
+      const session = await api.post<WebSession>('/api/sessions', {
+        name: sessionName,
+      });
+      setSessions((prev) => [session, ...prev]);
+      setActiveSessionId(session.id);
+      return session;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const renameSession = useCallback(async (id: string, name: string) => {
+    try {
+      await api.put('/api/sessions/' + encodeURIComponent(id), { name });
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, name, updated_at: new Date().toISOString() } : s)),
+      );
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  const deleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await api.delete('/api/sessions/' + encodeURIComponent(id));
+        setSessions((prev) => {
+          const remaining = prev.filter((s) => s.id !== id);
+          if (remaining.length === 0) {
+            // Create a new default session
+            api
+              .post<WebSession>('/api/sessions', { name: 'Chat 1' })
+              .then((s) => {
+                setSessions([s]);
+                setActiveSessionId(s.id);
+              });
+            return [];
+          }
+          if (id === activeSessionId) {
+            setActiveSessionId(remaining[0].id);
+          }
+          return remaining;
+        });
+      } catch {
+        // Ignore
+      }
+    },
+    [activeSessionId],
+  );
+
+  const handleSessionRenamed = useCallback((id: string, name: string) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, name } : s)),
+    );
+  }, []);
+
+  return {
+    sessions,
+    activeSessionId,
+    setActiveSessionId,
+    createSession,
+    renameSession,
+    deleteSession,
+    handleSessionRenamed,
+  };
+}

@@ -5,7 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getSuccessfulRunCount, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -263,12 +263,12 @@ export async function processTaskIpc(
           schedule_value: data.schedule_value,
           context_mode: contextMode,
           next_run: nextRun,
-          status: 'active',
+          status: 'draft',
           created_at: new Date().toISOString(),
         });
         logger.info(
           { taskId, sourceGroup, targetFolder, contextMode },
-          'Task created via IPC',
+          'Task created as draft via IPC',
         );
       }
       break;
@@ -322,6 +322,39 @@ export async function processTaskIpc(
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task cancel attempt',
+          );
+        }
+      }
+      break;
+
+    case 'activate_task':
+      if (data.taskId) {
+        const task = getTaskById(data.taskId);
+        if (task && (isMain || task.group_folder === sourceGroup)) {
+          if (task.status !== 'draft') {
+            logger.warn(
+              { taskId: data.taskId, status: task.status },
+              'Cannot activate task: not in draft status',
+            );
+            break;
+          }
+          const successCount = getSuccessfulRunCount(data.taskId);
+          if (successCount === 0) {
+            logger.warn(
+              { taskId: data.taskId },
+              'Cannot activate task: no successful test run',
+            );
+            break;
+          }
+          updateTask(data.taskId, { status: 'active' });
+          logger.info(
+            { taskId: data.taskId, sourceGroup },
+            'Task activated via IPC',
+          );
+        } else {
+          logger.warn(
+            { taskId: data.taskId, sourceGroup },
+            'Unauthorized task activate attempt',
           );
         }
       }

@@ -147,7 +147,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Task ${taskId} scheduled: ${args.schedule_type} - ${args.schedule_value}` }],
+      content: [{ type: 'text' as const, text: `Task ${taskId} created as DRAFT: ${args.schedule_type} - ${args.schedule_value}. The task will NOT run until activated. You should test it first using activate_task (which requires at least one successful test run), or tell the user the task needs testing before it goes live.` }],
     };
   },
 );
@@ -244,6 +244,25 @@ server.tool(
     writeIpcFile(TASKS_DIR, data);
 
     return { content: [{ type: 'text' as const, text: `Task ${args.task_id} cancellation requested.` }] };
+  },
+);
+
+server.tool(
+  'activate_task',
+  'Activate a draft task so it starts running on schedule. The task must have at least one successful test run before activation. Use resume_task instead if the task is paused (not draft).',
+  { task_id: z.string().describe('The task ID to activate') },
+  async (args) => {
+    const data = {
+      type: 'activate_task',
+      taskId: args.task_id,
+      groupFolder,
+      isMain,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} activation requested. It will be activated if it has at least one successful test run.` }] };
   },
 );
 

@@ -115,28 +115,58 @@ export function resolveMood(): ResolvedMood {
   };
 }
 
+/** Regex for the new mandatory format: *[mood:X:Y]* at end of message */
+const MOOD_TAG_NEW = /\s*\*\[mood:(\w+):(\d+)\]\*\s*$/;
+/** Regex for the old format: [mood:X] or [mood:X energy:Y] anywhere */
+const MOOD_TAG_OLD = /\[mood:(\w+)(?:\s+energy:(\d+))?\]\s*/g;
+
+/** Strip all mood tag formats from text for display */
+export function stripMoodTags(text: string): string {
+  return text.replace(MOOD_TAG_NEW, '').replace(MOOD_TAG_OLD, '').trim();
+}
+
 /**
- * Parse [mood:X] or [mood:X energy:Y] tags from bot text.
- * Returns the cleaned text and the new mood if found.
+ * Parse mood tags from bot text. Supports both:
+ *   *[mood:annoyed:3]* (new, mandatory, end of message)
+ *   [mood:annoyed energy:3] (old, inline)
  * Updates mood.json immediately as a manual override.
  */
-export function applyMoodTag(text: string): { cleanText: string; mood: string } {
-  const match = text.match(/\[mood:(\w+)(?:\s+energy:(\d+))?\]/);
-  if (!match) {
-    const current = resolveMood();
-    return { cleanText: text, mood: current.current_mood };
+export function applyMoodTag(text: string): {
+  cleanText: string;
+  mood: string;
+} {
+  // Try new format first (preferred)
+  const newMatch = text.match(MOOD_TAG_NEW);
+  if (newMatch) {
+    const newMood = newMatch[1];
+    const newEnergy = parseInt(newMatch[2], 10);
+    const cleanText = stripMoodTags(text);
+
+    const data = readMoodFile();
+    data.current_mood = newMood;
+    data.energy = newEnergy;
+    data.updated_at = new Date().toISOString();
+    writeMoodFile(data);
+
+    return { cleanText, mood: newMood };
   }
 
-  const newMood = match[1];
-  const newEnergy = match[2] ? parseInt(match[2], 10) : undefined;
-  const cleanText = text.replace(/\[mood:\w+(?:\s+energy:\d+)?\]\s*/g, '').trim();
+  // Try old format
+  const oldMatch = text.match(/\[mood:(\w+)(?:\s+energy:(\d+))?\]/);
+  if (oldMatch) {
+    const newMood = oldMatch[1];
+    const newEnergy = oldMatch[2] ? parseInt(oldMatch[2], 10) : undefined;
+    const cleanText = stripMoodTags(text);
 
-  // Write override to mood.json
-  const data = readMoodFile();
-  data.current_mood = newMood;
-  if (newEnergy !== undefined) data.energy = newEnergy;
-  data.updated_at = new Date().toISOString();
-  writeMoodFile(data);
+    const data = readMoodFile();
+    data.current_mood = newMood;
+    if (newEnergy !== undefined) data.energy = newEnergy;
+    data.updated_at = new Date().toISOString();
+    writeMoodFile(data);
 
-  return { cleanText, mood: newMood };
+    return { cleanText, mood: newMood };
+  }
+
+  const current = resolveMood();
+  return { cleanText: text, mood: current.current_mood };
 }
