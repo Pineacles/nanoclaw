@@ -57,7 +57,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { runTaskNow, startSchedulerLoop, SchedulerDependencies } from './task-scheduler.js';
+import {
+  runTaskNow,
+  startSchedulerLoop,
+  SchedulerDependencies,
+} from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 

@@ -241,7 +241,11 @@ async function handleTaskCreate(
     try {
       CronExpressionParser.parse(body.schedule_value);
     } catch {
-      return error(res, `Invalid cron expression: "${body.schedule_value}"`, 400);
+      return error(
+        res,
+        `Invalid cron expression: "${body.schedule_value}"`,
+        400,
+      );
     }
   }
 
@@ -259,7 +263,9 @@ async function handleTaskCreate(
   };
   // Auto-compute next_run for cron/interval tasks if not provided
   if (!task.next_run && task.schedule_type !== 'once') {
-    task.next_run = computeNextRun(task as Parameters<typeof computeNextRun>[0]);
+    task.next_run = computeNextRun(
+      task as Parameters<typeof computeNextRun>[0],
+    );
   }
   createTask(task);
   json(res, task, 201);
@@ -417,7 +423,14 @@ export interface ApiDeps {
     is_bot_message: number;
     mood: string;
   }>;
-  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
+  runTaskNow?: (
+    taskId: string,
+  ) => Promise<{
+    status: string;
+    result: string | null;
+    error: string | null;
+    duration_ms: number;
+  }>;
 }
 
 export async function handleApiRoute(
@@ -502,7 +515,7 @@ export async function handleApiRoute(
     if (taskRunMatch && method === 'POST') {
       const taskId = decodeURIComponent(taskRunMatch[1]);
       if (!deps.runTaskNow) {
-        return error(res, 'Run task not available', 501), true;
+        return (error(res, 'Run task not available', 501), true);
       }
       try {
         const result = await deps.runTaskNow(taskId);

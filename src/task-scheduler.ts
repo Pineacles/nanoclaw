@@ -245,13 +245,28 @@ async function runTask(
 export async function runTaskNow(
   taskId: string,
   deps: SchedulerDependencies,
-): Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }> {
+): Promise<{
+  status: string;
+  result: string | null;
+  error: string | null;
+  duration_ms: number;
+}> {
   const task = getTaskById(taskId);
   if (!task) {
-    return { status: 'error', result: null, error: 'Task not found', duration_ms: 0 };
+    return {
+      status: 'error',
+      result: null,
+      error: 'Task not found',
+      duration_ms: 0,
+    };
   }
   if (task.status !== 'active' && task.status !== 'draft') {
-    return { status: 'error', result: null, error: `Task status is '${task.status}', must be 'active' or 'draft'`, duration_ms: 0 };
+    return {
+      status: 'error',
+      result: null,
+      error: `Task status is '${task.status}', must be 'active' or 'draft'`,
+      duration_ms: 0,
+    };
   }
 
   const startTime = Date.now();
@@ -260,14 +275,26 @@ export async function runTaskNow(
     groupDir = resolveGroupFolderPath(task.group_folder);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    return { status: 'error', result: null, error, duration_ms: Date.now() - startTime };
+    return {
+      status: 'error',
+      result: null,
+      error,
+      duration_ms: Date.now() - startTime,
+    };
   }
   fs.mkdirSync(groupDir, { recursive: true });
 
   const groups = deps.registeredGroups();
-  const group = Object.values(groups).find((g) => g.folder === task.group_folder);
+  const group = Object.values(groups).find(
+    (g) => g.folder === task.group_folder,
+  );
   if (!group) {
-    return { status: 'error', result: null, error: `Group not found: ${task.group_folder}`, duration_ms: Date.now() - startTime };
+    return {
+      status: 'error',
+      result: null,
+      error: `Group not found: ${task.group_folder}`,
+      duration_ms: Date.now() - startTime,
+    };
   }
 
   const isMain = group.isMain === true;
@@ -290,7 +317,8 @@ export async function runTaskNow(
   let error: string | null = null;
 
   const sessions = deps.getSessions();
-  const sessionId = task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+  const sessionId =
+    task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
   const TASK_CLOSE_DELAY_MS = 10000;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -356,7 +384,12 @@ export async function runTaskNow(
     error,
   });
 
-  return { status: error ? 'error' : 'success', result, error, duration_ms: durationMs };
+  return {
+    status: error ? 'error' : 'success',
+    result,
+    error,
+    duration_ms: durationMs,
+  };
 }
 
 let schedulerRunning = false;

@@ -9,7 +9,14 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
-  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
+  runTaskNow?: (
+    taskId: string,
+  ) => Promise<{
+    status: string;
+    result: string | null;
+    error: string | null;
+    duration_ms: number;
+  }>;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

@@ -17,7 +17,14 @@ import type { ChannelOpts } from '../registry.js';
 import { createWebServer, WebServer } from './web-server.js';
 
 export interface WebChannelOpts extends ChannelOpts {
-  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
+  runTaskNow?: (
+    taskId: string,
+  ) => Promise<{
+    status: string;
+    result: string | null;
+    error: string | null;
+    duration_ms: number;
+  }>;
 }
 
 const GROUP_JID = 'web:seyoung';
@@ -87,7 +94,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       // Create nightly mood planning task if not exists
       const existingTasks = getTasksForGroup(GROUP_FOLDER);
       const hasMoodTask = existingTasks.some(
-        (t) => t.prompt.includes('mood schedule') && (t.status === 'active' || t.status === 'draft'),
+        (t) =>
+          t.prompt.includes('mood schedule') &&
+          (t.status === 'active' || t.status === 'draft'),
       );
       if (!hasMoodTask) {
         const moodTask = {
@@ -103,7 +112,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           status: 'active' as const,
           created_at: new Date().toISOString(),
         };
-        moodTask.next_run = computeNextRun(moodTask as Parameters<typeof computeNextRun>[0]);
+        moodTask.next_run = computeNextRun(
+          moodTask as Parameters<typeof computeNextRun>[0],
+        );
         createTask(moodTask);
         logger.info('Created nightly mood planning task for Seyoung');
       }

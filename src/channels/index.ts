@@ -12,3 +12,4 @@
 import './web/index.js';
 
 // whatsapp
+import './whatsapp.js';

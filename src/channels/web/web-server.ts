@@ -6,7 +6,15 @@ import crypto from 'crypto';
 
 import { readEnvFile } from '../../env.js';
 import { logger } from '../../logger.js';
-import { storeMessage, storeMessageDirect, touchWebSession, getWebSessions, getBotMessageCount, updateWebSession, getChatMessages } from '../../db.js';
+import {
+  storeMessage,
+  storeMessageDirect,
+  touchWebSession,
+  getWebSessions,
+  getBotMessageCount,
+  updateWebSession,
+  getChatMessages,
+} from '../../db.js';
 import { resolveMood, applyMoodTag, stripMoodTags } from './mood.js';
 import { verifyAuth } from './auth.js';
 import { handleApiRoute, ApiDeps } from './api-routes.js';
@@ -31,7 +39,14 @@ const GROUP_JID = 'web:seyoung';
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
   getMessages: (sessionId?: string) => ReturnType<ApiDeps['getMessages']>;
-  runTaskNow?: (taskId: string) => Promise<{ status: string; result: string | null; error: string | null; duration_ms: number }>;
+  runTaskNow?: (
+    taskId: string,
+  ) => Promise<{
+    status: string;
+    result: string | null;
+    error: string | null;
+    duration_ms: number;
+  }>;
 }
 
 export interface WebServer {
@@ -62,14 +77,27 @@ async function generateSessionTitle(
     const { spawn } = await import('child_process');
 
     const stdout = await new Promise<string>((resolve, reject) => {
-      const proc = spawn('claude', ['--print', '--model', 'claude-haiku-4-5-20251001'], {
-        timeout: 30000,
-        env: { ...process.env, PATH: process.env.PATH + ':/home/pineappleles/.nvm/versions/node/v22.22.1/bin' },
-      });
+      const proc = spawn(
+        'claude',
+        ['--print', '--model', 'claude-haiku-4-5-20251001'],
+        {
+          timeout: 30000,
+          env: {
+            ...process.env,
+            PATH:
+              process.env.PATH +
+              ':/home/pineappleles/.nvm/versions/node/v22.22.1/bin',
+          },
+        },
+      );
       let out = '';
       let err = '';
-      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.stdout.on('data', (d: Buffer) => {
+        out += d.toString();
+      });
+      proc.stderr.on('data', (d: Buffer) => {
+        err += d.toString();
+      });
       proc.on('close', (code) => {
         if (code === 0) resolve(out);
         else reject(new Error(`claude exit ${code}: ${err}`));
