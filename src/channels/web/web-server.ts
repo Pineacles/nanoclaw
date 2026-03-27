@@ -243,15 +243,17 @@ async function handleInternalRoute(
         true
       );
     }
-    const id = saveMemory({
+    const result = saveMemory({
       group_folder: body.group_folder,
       content: body.content,
       category: body.category,
       importance: body.importance,
       tags: body.tags,
       source: body.source,
+      confidence: body.confidence,
+      valence: body.valence,
     });
-    return (internalJson(res, { id }), true);
+    return (internalJson(res, result), true);
   }
 
   // --- Memory search ---
@@ -269,6 +271,12 @@ async function handleInternalRoute(
       query,
       category: url.searchParams.get('category') || undefined,
       limit: parseInt(url.searchParams.get('limit') || '10', 10),
+      valence_min: url.searchParams.has('valence_min')
+        ? parseFloat(url.searchParams.get('valence_min')!)
+        : undefined,
+      valence_max: url.searchParams.has('valence_max')
+        ? parseFloat(url.searchParams.get('valence_max')!)
+        : undefined,
     });
     return (internalJson(res, results), true);
   }

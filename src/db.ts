@@ -457,13 +457,17 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
-      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'
+      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status' | 'context_mode'
     >
   >,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
 
+  if (updates.context_mode !== undefined) {
+    fields.push('context_mode = ?');
+    values.push(updates.context_mode);
+  }
   if (updates.prompt !== undefined) {
     fields.push('prompt = ?');
     values.push(updates.prompt);

@@ -76,6 +76,20 @@ function getMemoryDb(groupFolder: string): Database.Database {
     // Already exists
   }
 
+  // Migrations — add new columns safely
+  const migrations = [
+    'ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7',
+    'ALTER TABLE memories ADD COLUMN superseded_by TEXT DEFAULT NULL',
+    'ALTER TABLE memories ADD COLUMN valence REAL NOT NULL DEFAULT 0.0',
+  ];
+  for (const sql of migrations) {
+    try {
+      db.exec(sql);
+    } catch {
+      /* column already exists */
+    }
+  }
+
   dbs.set(groupFolder, db);
   return db;
 }
@@ -90,6 +104,9 @@ export interface Memory {
   importance: number;
   tags: string | null;
   source: string;
+  confidence: number;
+  valence: number;
+  superseded_by: string | null;
   created_at: string;
   last_accessed: string;
   access_count: number;
@@ -103,6 +120,13 @@ export interface MemorySaveOpts {
   importance?: number;
   tags?: string;
   source?: string;
+  confidence?: number;
+  valence?: number;
+}
+
+export interface MemorySaveResult {
+  id: string;
+  superseded: string[];
 }
 
 export interface MemorySearchOpts {
@@ -110,23 +134,96 @@ export interface MemorySearchOpts {
   query: string;
   category?: string;
   limit?: number;
+  valence_min?: number;
+  valence_max?: number;
 }
 
 export interface MemorySearchResult extends Memory {
   score: number;
 }
 
+// --- Conflict Detection ---
+
+function findConflicts(
+  db: Database.Database,
+  opts: MemorySaveOpts,
+): Memory[] {
+  // Build FTS query from significant words in the content
+  const ftsQuery = opts.content
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 8)
+    .join(' OR ');
+
+  if (!ftsQuery) return [];
+
+  try {
+    const rows = db
+      .prepare(
+        `
+      SELECT m.* FROM memories m
+      JOIN memories_fts fts ON fts.rowid = m.rowid
+      WHERE m.group_folder = ? AND m.archived = 0
+        AND m.category = ?
+        AND memories_fts MATCH ?
+      ORDER BY fts.rank
+      LIMIT 5
+    `,
+      )
+      .all(
+        opts.group_folder,
+        opts.category || 'observation',
+        ftsQuery,
+      ) as Memory[];
+
+    // Filter to memories with 2+ overlapping tags — stronger signal of conflict
+    // Single tag overlap (e.g. just "michael") is too broad
+    if (opts.tags && rows.length > 0) {
+      const newTags = new Set(
+        opts.tags.split(',').map((t) => t.trim().toLowerCase()),
+      );
+      const withOverlap = rows.filter((r) => {
+        if (!r.tags) return false;
+        const oldTags = r.tags.split(',').map((t) => t.trim().toLowerCase());
+        const overlap = oldTags.filter((t) => newTags.has(t)).length;
+        return overlap >= 2;
+      });
+      if (withOverlap.length > 0) return withOverlap;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 // --- Accessors ---
 
-export function saveMemory(opts: MemorySaveOpts): string {
+export function saveMemory(opts: MemorySaveOpts): MemorySaveResult {
   const db = getMemoryDb(opts.group_folder);
   const id = `mem-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   const now = new Date().toISOString();
 
+  // Detect and supersede conflicting memories
+  const conflicts = findConflicts(db, opts);
+  const superseded: string[] = [];
+  if (conflicts.length > 0) {
+    const archiveStmt = db.prepare(
+      'UPDATE memories SET archived = 1, superseded_by = ? WHERE id = ?',
+    );
+    const archiveAll = db.transaction(() => {
+      for (const c of conflicts) {
+        archiveStmt.run(id, c.id);
+        superseded.push(c.id);
+      }
+    });
+    archiveAll();
+  }
+
   db.prepare(
     `
-    INSERT INTO memories (id, group_folder, content, category, importance, tags, source, created_at, last_accessed, access_count, archived)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+    INSERT INTO memories (id, group_folder, content, category, importance, tags, source, confidence, valence, created_at, last_accessed, access_count, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
   `,
   ).run(
     id,
@@ -136,11 +233,13 @@ export function saveMemory(opts: MemorySaveOpts): string {
     opts.importance ?? 5,
     opts.tags || null,
     opts.source || 'agent',
+    opts.confidence ?? 0.7,
+    opts.valence ?? 0.0,
     now,
     now,
   );
 
-  return id;
+  return { id, superseded };
 }
 
 export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
@@ -154,6 +253,16 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
   if (opts.category) {
     conditions.push('m.category = ?');
     params.push(opts.category);
+  }
+
+  if (opts.valence_min !== undefined) {
+    conditions.push('m.valence >= ?');
+    params.push(opts.valence_min);
+  }
+
+  if (opts.valence_max !== undefined) {
+    conditions.push('m.valence <= ?');
+    params.push(opts.valence_max);
   }
 
   // Use FTS5 MATCH for the query
@@ -199,8 +308,9 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
   const scored: MemorySearchResult[] = rows.map((row) => {
     const daysSinceAccess =
       (Date.now() - new Date(row.last_accessed).getTime()) / 86400000;
+    const confidence = (row as unknown as { confidence: number }).confidence ?? 0.7;
     const score =
-      row.importance * 2 +
+      row.importance * 2 * confidence +
       Math.log(row.access_count + 1) * 3 -
       daysSinceAccess * 0.1 +
       Math.abs(row.fts_rank) * 5;
@@ -268,7 +378,10 @@ export function updateMemory(
   groupFolder: string,
   id: string,
   updates: Partial<
-    Pick<Memory, 'content' | 'importance' | 'tags' | 'category'>
+    Pick<
+      Memory,
+      'content' | 'importance' | 'tags' | 'category' | 'confidence' | 'valence'
+    >
   >,
 ): boolean {
   const db = getMemoryDb(groupFolder);
@@ -290,6 +403,14 @@ export function updateMemory(
   if (updates.category !== undefined) {
     fields.push('category = ?');
     values.push(updates.category);
+  }
+  if (updates.confidence !== undefined) {
+    fields.push('confidence = ?');
+    values.push(updates.confidence);
+  }
+  if (updates.valence !== undefined) {
+    fields.push('valence = ?');
+    values.push(updates.valence);
   }
 
   if (fields.length === 0) return false;
@@ -354,6 +475,8 @@ export interface MemoryStats {
   archived: number;
   by_category: Record<string, number>;
   avg_importance: number;
+  avg_confidence: number;
+  avg_valence: number;
   oldest: string | null;
   newest: string | null;
   most_recalled: { content: string; access_count: number } | null;
@@ -389,9 +512,13 @@ export function getMemoryStats(groupFolder: string): MemoryStats {
 
   const avgRow = db
     .prepare(
-      'SELECT AVG(importance) as avg FROM memories WHERE group_folder = ? AND archived = 0',
+      'SELECT AVG(importance) as avg_imp, AVG(confidence) as avg_conf, AVG(valence) as avg_val FROM memories WHERE group_folder = ? AND archived = 0',
     )
-    .get(groupFolder) as { avg: number | null };
+    .get(groupFolder) as {
+    avg_imp: number | null;
+    avg_conf: number | null;
+    avg_val: number | null;
+  };
 
   const oldest =
     (
@@ -430,7 +557,9 @@ export function getMemoryStats(groupFolder: string): MemoryStats {
     total,
     archived,
     by_category,
-    avg_importance: Math.round((avgRow.avg ?? 0) * 10) / 10,
+    avg_importance: Math.round((avgRow.avg_imp ?? 0) * 10) / 10,
+    avg_confidence: Math.round((avgRow.avg_conf ?? 0) * 100) / 100,
+    avg_valence: Math.round((avgRow.avg_val ?? 0) * 100) / 100,
     oldest,
     newest,
     most_recalled: topRecall

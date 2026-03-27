@@ -65,7 +65,7 @@ function handleMessages(
   const messages = getMessages(sessionId).map((m) => ({
     ...m,
     // Strip system time note injected for the agent — not for the UI
-    content: m.content.replace(/^\[System: Current time is [^\]]+\]\n/, ''),
+    content: m.content.replace(/^\[System: Current time is [\s\S]+\]\n/, ''),
   }));
   json(res, messages);
 }
