@@ -16,18 +16,35 @@ export interface ToolStatus {
   target?: string;
 }
 
+export interface TaskEvent {
+  type: 'task_started' | 'task_progress' | 'task_complete';
+  taskId: string;
+  tool?: string;
+  target?: string;
+  status?: string;
+  result?: string | null;
+  error?: string | null;
+  duration_ms?: number;
+}
+
 export function useChat(
   authenticated: boolean,
   activeSessionId: string,
   onMoodPush?: (mood: { current_mood: string; energy: number; activity: string }) => void,
   onSessionRenamed?: (sessionId: string, name: string) => void,
+  onTaskEvent?: (event: TaskEvent) => void,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
+  const [isQueued, setIsQueued] = useState(false);
   const onMoodPushRef = useRef(onMoodPush);
   const onSessionRenamedRef = useRef(onSessionRenamed);
+  const onTaskEventRef = useRef(onTaskEvent);
+  const activeSessionIdRef = useRef(activeSessionId);
   onMoodPushRef.current = onMoodPush;
+  onTaskEventRef.current = onTaskEvent;
+  activeSessionIdRef.current = activeSessionId;
   onSessionRenamedRef.current = onSessionRenamed;
   const streamingRef = useRef<{ id: string; content: string } | null>(null);
 
@@ -63,9 +80,58 @@ export function useChat(
   }, [authenticated, activeSessionId]);
 
   const onWsMessage = useCallback(
-    (msg: { type: string; id?: string; content?: string; done?: boolean; isTyping?: boolean; message?: string; tool?: string; target?: string; current_mood?: string; energy?: number; activity?: string; sessionId?: string; name?: string }) => {
+    (msg: { type: string; id?: string; content?: string; done?: boolean; isTyping?: boolean; message?: string; tool?: string; target?: string; current_mood?: string; energy?: number; activity?: string; sessionId?: string; name?: string; sender_name?: string; timestamp?: string }) => {
+      // WhatsApp bridged message — add as a user message to the chat
+      if (msg.type === 'new_user_message' && msg.id && msg.content) {
+        if (msg.sessionId && msg.sessionId !== activeSessionIdRef.current) return;
+        setMessages((prev) => {
+          // Deduplicate
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: msg.id!,
+              content: msg.content!,
+              sender: 'user' as const,
+              timestamp: msg.timestamp || new Date().toISOString(),
+            },
+          ];
+        });
+      }
+
       if (msg.type === 'session_renamed' && msg.sessionId && msg.name) {
         onSessionRenamedRef.current?.(msg.sessionId, msg.name);
+      }
+
+      if (msg.type === 'task_started' || msg.type === 'task_progress' || msg.type === 'task_complete') {
+        onTaskEventRef.current?.(msg as unknown as TaskEvent);
+      }
+
+      // Session state — sent on connect, session switch, or queue status change
+      if (msg.type === 'session_state' && msg.sessionId === activeSessionIdRef.current) {
+        setIsTyping(!!msg.isTyping);
+        setToolStatus(msg.tool ? { tool: (msg.tool as unknown as {tool:string}).tool, target: (msg.tool as unknown as {tool:string;target?:string}).target } : null);
+        setIsQueued(!!(msg as unknown as { queued?: boolean }).queued);
+        // Restore streaming message if one is in progress
+        const stateMsg = msg as unknown as { messageId?: string; content?: string };
+        if (stateMsg.messageId && stateMsg.content) {
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === stateMsg.messageId);
+            const updated: ChatMessage = {
+              id: stateMsg.messageId!,
+              content: stateMsg.content!,
+              sender: 'bot',
+              timestamp: new Date().toISOString(),
+              streaming: true,
+            };
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = updated;
+              return next;
+            }
+            return [...prev, updated];
+          });
+        }
       }
 
       if (msg.type === 'mood' && msg.current_mood) {
@@ -77,23 +143,33 @@ export function useChat(
       }
 
       if (msg.type === 'typing') {
+        // Ignore typing for other sessions
+        if (msg.sessionId && msg.sessionId !== activeSessionIdRef.current) return;
         const typing = msg.isTyping ?? false;
         setIsTyping(typing);
+        // Typing started means no longer queued
+        if (typing) setIsQueued(false);
         if (!typing) {
           setToolStatus(null);
         }
       }
 
       if (msg.type === 'tool_use') {
+        if (msg.sessionId && msg.sessionId !== activeSessionIdRef.current) return;
         setToolStatus({ tool: msg.tool!, target: msg.target });
       }
 
       if (msg.type === 'message') {
-        const { id, content, done } = msg as {
+        const { id, content, done, sessionId, mood } = msg as {
           id: string;
           content: string;
           done: boolean;
+          sessionId?: string;
+          mood?: string;
         };
+
+        // Ignore messages for other sessions
+        if (sessionId && sessionId !== activeSessionIdRef.current) return;
 
         // Clear tool status when actual content arrives
         if (content) {
@@ -113,6 +189,7 @@ export function useChat(
                 content,
                 sender: 'bot' as const,
                 timestamp: new Date().toISOString(),
+                mood,
               },
             ];
           });
@@ -146,6 +223,18 @@ export function useChat(
     onMessage: onWsMessage,
     enabled: authenticated,
   });
+
+  // Request current session state on connect and session switch
+  // This restores typing/tool/stream state after page refresh
+  useEffect(() => {
+    if (connected && activeSessionId) {
+      send({ type: 'get_session_state', sessionId: activeSessionId });
+    }
+    // Reset local state when switching sessions
+    setIsTyping(false);
+    setToolStatus(null);
+    setIsQueued(false);
+  }, [connected, activeSessionId, send]);
 
   const sendMessage = useCallback(
     (content: string, images?: string[]) => {
@@ -182,5 +271,5 @@ export function useChat(
     [],
   );
 
-  return { messages, isTyping, toolStatus, connected, sendMessage, deleteMessage };
+  return { messages, isTyping, toolStatus, isQueued, connected, sendMessage, deleteMessage };
 }

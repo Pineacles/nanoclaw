@@ -124,6 +124,9 @@ function handleSessionDelete(
   res: ServerResponse,
   sessionId: string,
 ): void {
+  if (sessionId === 'whatsapp') {
+    return error(res, 'Cannot delete the WhatsApp session', 403);
+  }
   deleteWebSession(sessionId);
   json(res, { ok: true });
 }
@@ -414,6 +417,17 @@ function handleQuickActionDelete(
 
 // --- Route dispatcher ---
 
+export interface TaskProgressEvent {
+  type: 'task_started' | 'task_progress' | 'task_complete';
+  taskId: string;
+  tool?: string;
+  target?: string;
+  status?: string;
+  result?: string | null;
+  error?: string | null;
+  duration_ms?: number;
+}
+
 export interface ApiDeps {
   getMessages: (sessionId?: string) => Array<{
     id: string;
@@ -423,14 +437,13 @@ export interface ApiDeps {
     is_bot_message: number;
     mood: string;
   }>;
-  runTaskNow?: (
-    taskId: string,
-  ) => Promise<{
+  runTaskNow?: (taskId: string, onProgress?: (event: TaskProgressEvent) => void) => Promise<{
     status: string;
     result: string | null;
     error: string | null;
     duration_ms: number;
   }>;
+  broadcast?: (msg: unknown) => void;
 }
 
 export async function handleApiRoute(
@@ -517,13 +530,19 @@ export async function handleApiRoute(
       if (!deps.runTaskNow) {
         return (error(res, 'Run task not available', 501), true);
       }
-      try {
-        const result = await deps.runTaskNow(taskId);
-        json(res, result);
-      } catch (err) {
+      logger.info({ taskId }, 'Task test-run requested');
+      // Run in background to avoid HTTP timeout (tasks can take minutes)
+      json(res, { status: 'started', taskId });
+      const onProgress = deps.broadcast
+        ? (event: TaskProgressEvent) => deps.broadcast!(event)
+        : undefined;
+      deps.runTaskNow(taskId, onProgress).then((result) => {
+        logger.info({ taskId, status: result.status, duration_ms: result.duration_ms, result: result.result?.slice(0, 200) }, 'Task test-run completed');
+      }).catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        error(res, msg, 500);
-      }
+        logger.error({ taskId, err: msg }, 'Task test-run failed');
+        deps.broadcast?.({ type: 'task_complete', taskId, status: 'error', result: null, error: msg, duration_ms: 0 });
+      });
       return true;
     }
 

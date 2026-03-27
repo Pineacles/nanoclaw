@@ -363,7 +363,7 @@ export function getNewMessages(
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, session_id
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
         AND is_bot_message = 0 AND content NOT LIKE ?
@@ -396,7 +396,7 @@ export function getMessagesSince(
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, session_id
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         AND is_bot_message = 0 AND content NOT LIKE ?
@@ -830,6 +830,77 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- Chat query for container agents ---
+
+export interface ChatQueryOptions {
+  groupFolder: string;
+  limit?: number;
+  source?: string;
+  since?: string;
+  sender?: string;
+}
+
+export interface ChatQueryRow {
+  timestamp: string;
+  channel: string;
+  sender_name: string;
+  content: string;
+}
+
+/**
+ * Query chat messages across all JIDs belonging to a group.
+ * Used by the internal API so container agents can read recent chat history.
+ */
+export function queryChatMessages(opts: ChatQueryOptions): ChatQueryRow[] {
+  // Find all JIDs that belong to this group
+  const jidRows = db
+    .prepare('SELECT jid FROM registered_groups WHERE folder = ?')
+    .all(opts.groupFolder) as Array<{ jid: string }>;
+
+  if (jidRows.length === 0) return [];
+
+  const jids = jidRows.map((r) => r.jid);
+  const placeholders = jids.map(() => '?').join(',');
+
+  const conditions: string[] = [`m.chat_jid IN (${placeholders})`];
+  const params: unknown[] = [...jids];
+
+  if (opts.since) {
+    conditions.push('m.timestamp > ?');
+    params.push(opts.since);
+  }
+
+  if (opts.sender) {
+    conditions.push('m.sender_name LIKE ?');
+    params.push(`%${opts.sender}%`);
+  }
+
+  if (opts.source && opts.source !== 'all') {
+    conditions.push('COALESCE(c.channel, ?) = ?');
+    params.push(opts.source, opts.source);
+  }
+
+  const limit = opts.limit ?? 20;
+  params.push(limit);
+
+  const sql = `
+    SELECT * FROM (
+      SELECT m.timestamp,
+             COALESCE(c.channel, 'unknown') as channel,
+             m.sender_name,
+             m.content
+      FROM messages m
+      LEFT JOIN chats c ON m.chat_jid = c.jid
+      WHERE ${conditions.join(' AND ')}
+        AND m.content != '' AND m.content IS NOT NULL
+      ORDER BY m.timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+
+  return db.prepare(sql).all(...params) as ChatQueryRow[];
 }
 
 // --- JSON migration ---

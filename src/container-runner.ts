@@ -229,6 +229,10 @@ function buildContainerArgs(
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
 
+  // Expose the web server so container tools can call internal APIs
+  const webPort = process.env.WEB_PORT || '3003';
+  args.push('-e', `NANOCLAW_HOST=http://${CONTAINER_HOST_GATEWAY}:${webPort}`);
+
   // Mirror the host's auth method with a placeholder value.
   // API key mode: SDK sends x-api-key, proxy replaces with real key.
   // OAuth mode:   SDK exchanges placeholder token for temp API key,
@@ -281,6 +285,8 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
+  // Group folder env var so scripts like query_chats.sh know which group they belong to
+  containerArgs.splice(containerArgs.length - 1, 0, '-e', `NANOCLAW_GROUP_FOLDER=${group.folder}`);
 
   logger.debug(
     {

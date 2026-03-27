@@ -1,6 +1,8 @@
 import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
+import { stripMoodTags } from './channels/web/mood.js';
 import fs from 'fs';
+import path from 'path';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
@@ -168,11 +170,25 @@ async function runTask(
     }, TASK_CLOSE_DELAY_MS);
   };
 
+  // Inject current date/time so the agent always knows when the task is running,
+  // even if the session context has been compacted and lost date awareness.
+  const taskNow = new Date().toLocaleString('en-GB', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+  const taskPrompt = `[Current date/time: ${taskNow}]\n\n${task.prompt}`;
+
   try {
     const output = await runContainerAgent(
       group,
       {
-        prompt: task.prompt,
+        prompt: taskPrompt,
         sessionId,
         groupFolder: task.group_folder,
         chatJid: task.chat_jid,
@@ -186,7 +202,7 @@ async function runTask(
         if (streamedOutput.result) {
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          await deps.sendMessage(task.chat_jid, stripMoodTags(streamedOutput.result));
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -242,9 +258,21 @@ async function runTask(
  * Run a task immediately (test run or ad-hoc execution).
  * Does NOT update next_run or mark once-tasks as completed.
  */
+export interface TaskProgressEvent {
+  type: 'task_started' | 'task_progress' | 'task_complete';
+  taskId: string;
+  tool?: string;
+  target?: string;
+  status?: string;
+  result?: string | null;
+  error?: string | null;
+  duration_ms?: number;
+}
+
 export async function runTaskNow(
   taskId: string,
   deps: SchedulerDependencies,
+  onProgress?: (event: TaskProgressEvent) => void,
 ): Promise<{
   status: string;
   result: string | null;
@@ -253,6 +281,7 @@ export async function runTaskNow(
 }> {
   const task = getTaskById(taskId);
   if (!task) {
+    logger.warn({ taskId }, 'runTaskNow: task not found');
     return {
       status: 'error',
       result: null,
@@ -260,6 +289,7 @@ export async function runTaskNow(
       duration_ms: 0,
     };
   }
+  logger.info({ taskId, prompt: task.prompt.slice(0, 80) }, 'runTaskNow: starting');
   if (task.status !== 'active' && task.status !== 'draft') {
     return {
       status: 'error',
@@ -323,18 +353,49 @@ export async function runTaskNow(
   const TASK_CLOSE_DELAY_MS = 10000;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Write close sentinel directly — runTaskNow bypasses the queue's active
+  // state tracking, so queue.closeStdin() would silently no-op.
+  const writeCloseSentinel = () => {
+    const inputDir = path.join(
+      process.cwd(),
+      'data',
+      'ipc',
+      task.group_folder,
+      'input',
+    );
+    try {
+      fs.mkdirSync(inputDir, { recursive: true });
+      fs.writeFileSync(path.join(inputDir, '_close'), '');
+    } catch {
+      // ignore
+    }
+  };
+
   const scheduleClose = () => {
     if (closeTimer) return;
-    closeTimer = setTimeout(() => {
-      deps.queue.closeStdin(task.chat_jid);
-    }, TASK_CLOSE_DELAY_MS);
+    closeTimer = setTimeout(writeCloseSentinel, TASK_CLOSE_DELAY_MS);
   };
+
+  // Inject current date/time for task context
+  const runNow = new Date().toLocaleString('en-GB', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+  const runNowPrompt = `[Current date/time: ${runNow}]\n\n${task.prompt}`;
+
+  onProgress?.({ type: 'task_started', taskId });
 
   try {
     const output = await runContainerAgent(
       group,
       {
-        prompt: task.prompt,
+        prompt: runNowPrompt,
         sessionId,
         groupFolder: task.group_folder,
         chatJid: task.chat_jid,
@@ -345,9 +406,17 @@ export async function runTaskNow(
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
+        if (streamedOutput.toolUse) {
+          onProgress?.({
+            type: 'task_progress',
+            taskId,
+            tool: streamedOutput.toolUse.tool,
+            target: streamedOutput.toolUse.target,
+          });
+        }
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          await deps.sendMessage(task.chat_jid, stripMoodTags(streamedOutput.result));
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -373,6 +442,7 @@ export async function runTaskNow(
   }
 
   const durationMs = Date.now() - startTime;
+  onProgress?.({ type: 'task_complete', taskId, status: error ? 'error' : 'success', result, error, duration_ms: durationMs });
 
   // Log the run but do NOT update next_run or mark as completed (test/ad-hoc run)
   logTaskRun({

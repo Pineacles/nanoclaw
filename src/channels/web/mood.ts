@@ -3,7 +3,7 @@ import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
 
 const GROUP_FOLDER = 'seyoung';
-const OVERRIDE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 export interface MoodScheduleSlot {
   time: string;
@@ -58,49 +58,72 @@ function getZurichTimeStr(): string {
 
 function findActiveSlot(schedule: MoodScheduleSlot[]): MoodScheduleSlot | null {
   if (!schedule || schedule.length === 0) return null;
-  const now = getZurichTimeStr(); // "HH:MM"
-  let active: MoodScheduleSlot | null = null;
-  for (const slot of schedule) {
-    if (slot.time <= now) {
-      active = slot;
+  const now = getZurichTimeStr();
+
+  // The schedule is chronological across a day cycle, but may wrap past midnight
+  // (e.g. 00:00, 09:00, ..., 22:30, 01:30). Detect wrap: if the last slot's time
+  // is earlier than the previous slot's time, everything after the wrap is "next day".
+  let wrapIndex = schedule.length; // no wrap by default
+  for (let i = 1; i < schedule.length; i++) {
+    if (schedule[i].time < schedule[i - 1].time) {
+      wrapIndex = i;
+      break;
     }
   }
-  // If no slot matched (before first slot), wrap around to last slot (overnight)
-  if (!active) {
-    active = schedule[schedule.length - 1];
+
+  const daySlots = schedule.slice(0, wrapIndex);
+  const overnightSlots = schedule.slice(wrapIndex);
+
+  // If we're in the overnight window (now < first day slot and overnight slots exist)
+  if (overnightSlots.length > 0 && now < daySlots[0].time) {
+    let active: MoodScheduleSlot | null = null;
+    for (const slot of overnightSlots) {
+      if (slot.time <= now) active = slot;
+    }
+    // Before first overnight slot — still on last day slot (e.g. 00:30 and overnight starts at 01:30)
+    return active || daySlots[daySlots.length - 1];
   }
-  return active;
+
+  // Normal daytime: find the latest day slot that has started
+  let active: MoodScheduleSlot | null = null;
+  for (const slot of daySlots) {
+    if (slot.time <= now) active = slot;
+  }
+  return active || daySlots[daySlots.length - 1];
 }
 
+/**
+ * Resolve current mood.
+ * - If the agent overrode mood via tag within the last 15 minutes, use that override.
+ * - Otherwise, fall back to the schedule slot for the current Zurich time.
+ */
 export function resolveMood(): ResolvedMood {
   const data = readMoodFile();
 
-  // Check if manually overridden within the last 30 minutes
+  // Activity always comes from the schedule
+  const slot = findActiveSlot(data.schedule);
+  const activity = slot?.activity || '';
+
+  // Check if agent overrode mood via tag within the last 15 minutes
   if (data.updated_at) {
     const overrideAge = Date.now() - new Date(data.updated_at).getTime();
     if (overrideAge < OVERRIDE_WINDOW_MS && overrideAge >= 0) {
-      // Use manual override as-is
-      const slot = findActiveSlot(data.schedule);
       return {
         current_mood: data.current_mood,
         energy: data.energy,
-        activity: slot?.activity || '',
+        activity,
         updated_at: data.updated_at,
         schedule: data.schedule,
       };
     }
   }
 
-  // Resolve from schedule
-  const slot = findActiveSlot(data.schedule);
+  // Override expired — revert to schedule
   if (slot) {
-    data.current_mood = slot.mood;
-    data.energy = slot.energy;
-    writeMoodFile(data);
     return {
       current_mood: slot.mood,
       energy: slot.energy,
-      activity: slot.activity,
+      activity,
       updated_at: data.updated_at,
       schedule: data.schedule,
     };
