@@ -9,14 +9,24 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runTaskNow?: (
     taskId: string,
+    onProgress?: (event: any) => void,
   ) => Promise<{
     status: string;
     result: string | null;
     error: string | null;
     duration_ms: number;
   }>;
+  // WhatsApp bridge config
+  whatsappBridgeJid?: string;
+  sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
+  onBridgeMessage?: (
+    senderName: string,
+    content: string,
+    images?: Buffer[],
+  ) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

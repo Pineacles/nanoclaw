@@ -9,9 +9,11 @@ interface Props {
   messages: ChatMessage[];
   isTyping: boolean;
   toolStatus: ToolStatusType | null;
+  isQueued: boolean;
   connected: boolean;
   onSend: (content: string, images?: string[]) => void;
   onDelete: (id: string) => void;
+  readOnly?: boolean;
 }
 
 const SUGGESTIONS = [
@@ -28,7 +30,7 @@ function getGreeting(): string {
   return 'Good evening';
 }
 
-export function Chat({ messages, isTyping, toolStatus, connected, onSend, onDelete }: Props) {
+export function Chat({ messages, isTyping, toolStatus, isQueued, connected, onSend, onDelete, readOnly }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const greeting = useMemo(() => getGreeting(), []);
 
@@ -87,6 +89,12 @@ export function Chat({ messages, isTyping, toolStatus, connected, onSend, onDele
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onDelete={onDelete} />
             ))}
+            {isQueued && (
+              <div className="flex items-center gap-3 px-5 py-3 bg-surface-container-high rounded-2xl w-fit">
+                <span className="material-symbols-outlined text-on-surface-variant/60 text-[18px] animate-pulse">hourglass_top</span>
+                <span className="text-sm text-on-surface-variant/80">Queued — another chat is being processed</span>
+              </div>
+            )}
             {isTyping && !messages.some((m) => m.streaming) && <TypingIndicator />}
             {toolStatus && <ToolStatus status={toolStatus} />}
           </div>
@@ -94,7 +102,16 @@ export function Chat({ messages, isTyping, toolStatus, connected, onSend, onDele
       </div>
 
       {/* Input */}
-      <InputBar onSend={onSend} disabled={!connected} />
+      {readOnly ? (
+        <div className="px-12 pb-6 pt-3">
+          <div className="max-w-3xl mx-auto flex items-center justify-center h-12 bg-surface-container-high border border-outline-variant/20 rounded-2xl text-on-surface-variant/40 text-sm">
+            <span className="material-symbols-outlined text-[18px] mr-2">smartphone</span>
+            Send messages from WhatsApp
+          </div>
+        </div>
+      ) : (
+        <InputBar onSend={onSend} disabled={!connected} />
+      )}
     </div>
   );
 }

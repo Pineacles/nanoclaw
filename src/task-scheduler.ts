@@ -202,7 +202,10 @@ async function runTask(
         if (streamedOutput.result) {
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, stripMoodTags(streamedOutput.result));
+          await deps.sendMessage(
+            task.chat_jid,
+            stripMoodTags(streamedOutput.result),
+          );
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -289,7 +292,10 @@ export async function runTaskNow(
       duration_ms: 0,
     };
   }
-  logger.info({ taskId, prompt: task.prompt.slice(0, 80) }, 'runTaskNow: starting');
+  logger.info(
+    { taskId, prompt: task.prompt.slice(0, 80) },
+    'runTaskNow: starting',
+  );
   if (task.status !== 'active' && task.status !== 'draft') {
     return {
       status: 'error',
@@ -416,7 +422,10 @@ export async function runTaskNow(
         }
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          await deps.sendMessage(task.chat_jid, stripMoodTags(streamedOutput.result));
+          await deps.sendMessage(
+            task.chat_jid,
+            stripMoodTags(streamedOutput.result),
+          );
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -442,7 +451,14 @@ export async function runTaskNow(
   }
 
   const durationMs = Date.now() - startTime;
-  onProgress?.({ type: 'task_complete', taskId, status: error ? 'error' : 'success', result, error, duration_ms: durationMs });
+  onProgress?.({
+    type: 'task_complete',
+    taskId,
+    status: error ? 'error' : 'success',
+    result,
+    error,
+    duration_ms: durationMs,
+  });
 
   // Log the run but do NOT update next_run or mark as completed (test/ad-hoc run)
   logTaskRun({

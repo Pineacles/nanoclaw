@@ -123,10 +123,12 @@ export function saveMemory(opts: MemorySaveOpts): string {
   const id = `mem-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   const now = new Date().toISOString();
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO memories (id, group_folder, content, category, importance, tags, source, created_at, last_accessed, access_count, archived)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-  `).run(
+  `,
+  ).run(
     id,
     opts.group_folder,
     opts.content,
@@ -146,10 +148,7 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
   const limit = opts.limit ?? 10;
 
   // FTS5 search with ranking
-  const conditions: string[] = [
-    'm.group_folder = ?',
-    'm.archived = 0',
-  ];
+  const conditions: string[] = ['m.group_folder = ?', 'm.archived = 0'];
   const params: unknown[] = [opts.group_folder];
 
   if (opts.category) {
@@ -171,7 +170,9 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
 
   let rows: Array<Memory & { fts_rank: number }>;
   try {
-    rows = db.prepare(sql).all(...params) as Array<Memory & { fts_rank: number }>;
+    rows = db.prepare(sql).all(...params) as Array<
+      Memory & { fts_rank: number }
+    >;
   } catch {
     // FTS query syntax error — fall back to LIKE search
     const likeSql = `
@@ -184,12 +185,20 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
     `;
     const likePattern = `%${opts.query}%`;
     // Replace the FTS match param with LIKE params
-    rows = db.prepare(likeSql).all(...params.slice(0, -2), likePattern, likePattern, limit * 3) as Array<Memory & { fts_rank: number }>;
+    rows = db
+      .prepare(likeSql)
+      .all(
+        ...params.slice(0, -2),
+        likePattern,
+        likePattern,
+        limit * 3,
+      ) as Array<Memory & { fts_rank: number }>;
   }
 
   // Score and re-rank
   const scored: MemorySearchResult[] = rows.map((row) => {
-    const daysSinceAccess = (Date.now() - new Date(row.last_accessed).getTime()) / 86400000;
+    const daysSinceAccess =
+      (Date.now() - new Date(row.last_accessed).getTime()) / 86400000;
     const score =
       row.importance * 2 +
       Math.log(row.access_count + 1) * 3 -
@@ -216,9 +225,14 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
   return results;
 }
 
-export function getMemoryById(groupFolder: string, id: string): Memory | undefined {
+export function getMemoryById(
+  groupFolder: string,
+  id: string,
+): Memory | undefined {
   const db = getMemoryDb(groupFolder);
-  return db.prepare('SELECT * FROM memories WHERE id = ? AND group_folder = ?').get(id, groupFolder) as Memory | undefined;
+  return db
+    .prepare('SELECT * FROM memories WHERE id = ? AND group_folder = ?')
+    .get(id, groupFolder) as Memory | undefined;
 }
 
 export function getRecentMemories(opts: {
@@ -238,43 +252,65 @@ export function getRecentMemories(opts: {
   const limit = opts.limit ?? 20;
   params.push(limit);
 
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM memories
     WHERE ${conditions.join(' AND ')}
     ORDER BY created_at DESC
     LIMIT ?
-  `).all(...params) as Memory[];
+  `,
+    )
+    .all(...params) as Memory[];
 }
 
 export function updateMemory(
   groupFolder: string,
   id: string,
-  updates: Partial<Pick<Memory, 'content' | 'importance' | 'tags' | 'category'>>,
+  updates: Partial<
+    Pick<Memory, 'content' | 'importance' | 'tags' | 'category'>
+  >,
 ): boolean {
   const db = getMemoryDb(groupFolder);
   const fields: string[] = [];
   const values: unknown[] = [];
 
-  if (updates.content !== undefined) { fields.push('content = ?'); values.push(updates.content); }
-  if (updates.importance !== undefined) { fields.push('importance = ?'); values.push(updates.importance); }
-  if (updates.tags !== undefined) { fields.push('tags = ?'); values.push(updates.tags); }
-  if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
+  if (updates.content !== undefined) {
+    fields.push('content = ?');
+    values.push(updates.content);
+  }
+  if (updates.importance !== undefined) {
+    fields.push('importance = ?');
+    values.push(updates.importance);
+  }
+  if (updates.tags !== undefined) {
+    fields.push('tags = ?');
+    values.push(updates.tags);
+  }
+  if (updates.category !== undefined) {
+    fields.push('category = ?');
+    values.push(updates.category);
+  }
 
   if (fields.length === 0) return false;
 
   values.push(id, groupFolder);
-  const result = db.prepare(
-    `UPDATE memories SET ${fields.join(', ')} WHERE id = ? AND group_folder = ?`,
-  ).run(...values);
+  const result = db
+    .prepare(
+      `UPDATE memories SET ${fields.join(', ')} WHERE id = ? AND group_folder = ?`,
+    )
+    .run(...values);
 
   return result.changes > 0;
 }
 
 export function deleteMemory(groupFolder: string, id: string): boolean {
   const db = getMemoryDb(groupFolder);
-  const result = db.prepare(
-    'UPDATE memories SET archived = 1 WHERE id = ? AND group_folder = ?',
-  ).run(id, groupFolder);
+  const result = db
+    .prepare(
+      'UPDATE memories SET archived = 1 WHERE id = ? AND group_folder = ?',
+    )
+    .run(id, groupFolder);
   return result.changes > 0;
 }
 
@@ -284,7 +320,11 @@ export function deleteMemory(groupFolder: string, id: string): boolean {
  */
 export function consolidateMemories(
   groupFolder: string,
-  opts?: { olderThanDays?: number; maxAccessCount?: number; maxImportance?: number },
+  opts?: {
+    olderThanDays?: number;
+    maxAccessCount?: number;
+    maxImportance?: number;
+  },
 ): number {
   const db = getMemoryDb(groupFolder);
   const days = opts?.olderThanDays ?? 90;
@@ -293,14 +333,18 @@ export function consolidateMemories(
 
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
 
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     UPDATE memories SET archived = 1
     WHERE group_folder = ?
       AND archived = 0
       AND created_at < ?
       AND access_count <= ?
       AND importance <= ?
-  `).run(groupFolder, cutoff, maxAccess, maxImp);
+  `,
+    )
+    .run(groupFolder, cutoff, maxAccess, maxImp);
 
   return result.changes;
 }
@@ -319,40 +363,68 @@ export interface MemoryStats {
 export function getMemoryStats(groupFolder: string): MemoryStats {
   const db = getMemoryDb(groupFolder);
 
-  const total = (db.prepare(
-    'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0',
-  ).get(groupFolder) as { n: number }).n;
+  const total = (
+    db
+      .prepare(
+        'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0',
+      )
+      .get(groupFolder) as { n: number }
+  ).n;
 
-  const archived = (db.prepare(
-    'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 1',
-  ).get(groupFolder) as { n: number }).n;
+  const archived = (
+    db
+      .prepare(
+        'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 1',
+      )
+      .get(groupFolder) as { n: number }
+  ).n;
 
-  const cats = db.prepare(
-    'SELECT category, COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0 GROUP BY category',
-  ).all(groupFolder) as Array<{ category: string; n: number }>;
+  const cats = db
+    .prepare(
+      'SELECT category, COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0 GROUP BY category',
+    )
+    .all(groupFolder) as Array<{ category: string; n: number }>;
   const by_category: Record<string, number> = {};
   for (const c of cats) by_category[c.category] = c.n;
 
-  const avgRow = db.prepare(
-    'SELECT AVG(importance) as avg FROM memories WHERE group_folder = ? AND archived = 0',
-  ).get(groupFolder) as { avg: number | null };
+  const avgRow = db
+    .prepare(
+      'SELECT AVG(importance) as avg FROM memories WHERE group_folder = ? AND archived = 0',
+    )
+    .get(groupFolder) as { avg: number | null };
 
-  const oldest = (db.prepare(
-    'SELECT created_at FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY created_at LIMIT 1',
-  ).get(groupFolder) as { created_at: string } | undefined)?.created_at ?? null;
+  const oldest =
+    (
+      db
+        .prepare(
+          'SELECT created_at FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY created_at LIMIT 1',
+        )
+        .get(groupFolder) as { created_at: string } | undefined
+    )?.created_at ?? null;
 
-  const newest = (db.prepare(
-    'SELECT created_at FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY created_at DESC LIMIT 1',
-  ).get(groupFolder) as { created_at: string } | undefined)?.created_at ?? null;
+  const newest =
+    (
+      db
+        .prepare(
+          'SELECT created_at FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY created_at DESC LIMIT 1',
+        )
+        .get(groupFolder) as { created_at: string } | undefined
+    )?.created_at ?? null;
 
-  const topRecall = db.prepare(
-    'SELECT content, access_count FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY access_count DESC LIMIT 1',
-  ).get(groupFolder) as { content: string; access_count: number } | undefined;
+  const topRecall = db
+    .prepare(
+      'SELECT content, access_count FROM memories WHERE group_folder = ? AND archived = 0 ORDER BY access_count DESC LIMIT 1',
+    )
+    .get(groupFolder) as { content: string; access_count: number } | undefined;
 
   const staleCutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-  const stale_count = (db.prepare(
-    'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0 AND created_at < ? AND access_count = 0',
-  ).get(groupFolder, staleCutoff) as { n: number }).n;
+  const stale_count = (
+    db
+      .prepare(
+        'SELECT COUNT(*) as n FROM memories WHERE group_folder = ? AND archived = 0 AND created_at < ? AND access_count = 0',
+      )
+      .get(groupFolder, staleCutoff) as { n: number }
+  ).n;
 
   return {
     total,
@@ -361,7 +433,9 @@ export function getMemoryStats(groupFolder: string): MemoryStats {
     avg_importance: Math.round((avgRow.avg ?? 0) * 10) / 10,
     oldest,
     newest,
-    most_recalled: topRecall ? { content: topRecall.content, access_count: topRecall.access_count } : null,
+    most_recalled: topRecall
+      ? { content: topRecall.content, access_count: topRecall.access_count }
+      : null,
     stale_count,
   };
 }

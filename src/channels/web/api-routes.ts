@@ -437,7 +437,10 @@ export interface ApiDeps {
     is_bot_message: number;
     mood: string;
   }>;
-  runTaskNow?: (taskId: string, onProgress?: (event: TaskProgressEvent) => void) => Promise<{
+  runTaskNow?: (
+    taskId: string,
+    onProgress?: (event: TaskProgressEvent) => void,
+  ) => Promise<{
     status: string;
     result: string | null;
     error: string | null;
@@ -536,13 +539,31 @@ export async function handleApiRoute(
       const onProgress = deps.broadcast
         ? (event: TaskProgressEvent) => deps.broadcast!(event)
         : undefined;
-      deps.runTaskNow(taskId, onProgress).then((result) => {
-        logger.info({ taskId, status: result.status, duration_ms: result.duration_ms, result: result.result?.slice(0, 200) }, 'Task test-run completed');
-      }).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error({ taskId, err: msg }, 'Task test-run failed');
-        deps.broadcast?.({ type: 'task_complete', taskId, status: 'error', result: null, error: msg, duration_ms: 0 });
-      });
+      deps
+        .runTaskNow(taskId, onProgress)
+        .then((result) => {
+          logger.info(
+            {
+              taskId,
+              status: result.status,
+              duration_ms: result.duration_ms,
+              result: result.result?.slice(0, 200),
+            },
+            'Task test-run completed',
+          );
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error({ taskId, err: msg }, 'Task test-run failed');
+          deps.broadcast?.({
+            type: 'task_complete',
+            taskId,
+            status: 'error',
+            result: null,
+            error: msg,
+            duration_ms: 0,
+          });
+        });
       return true;
     }
 

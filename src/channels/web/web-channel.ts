@@ -17,14 +17,18 @@ import type { ChannelOpts } from '../registry.js';
 import { createWebServer, WebServer } from './web-server.js';
 
 export interface WebChannelOpts extends ChannelOpts {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runTaskNow?: (
     taskId: string,
+    onProgress?: (event: any) => void,
   ) => Promise<{
     status: string;
     result: string | null;
     error: string | null;
     duration_ms: number;
   }>;
+  whatsappBridgeJid?: string;
+  sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
 }
 
 const GROUP_JID = 'web:seyoung';
@@ -34,26 +38,30 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
   let webServer: WebServer | null = null;
   let connected = false;
 
-  // Accumulate chunks for the current response
-  let responseAccumulator = '';
-  // Debounce timer: after last chunk, finalize the message
-  let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
+  // Per-session accumulators and finalize timers
+  const accumulators = new Map<string, string>();
+  const finalizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const FINALIZE_DELAY = 2000; // 2s after last chunk → mark done
 
-  function finalize() {
-    if (webServer && responseAccumulator) {
-      webServer.sendToClient(responseAccumulator, true);
-      responseAccumulator = '';
+  function finalize(sid: string) {
+    if (webServer && accumulators.has(sid)) {
+      webServer.sendToClient(accumulators.get(sid)!, true, sid);
+      accumulators.delete(sid);
     }
-    // Clear typing indicator when response is finalized
-    webServer?.setTyping(false);
-    finalizeTimer = null;
+    webServer?.setTyping(false, sid);
+    finalizeTimers.delete(sid);
   }
 
-  function resetFinalizeTimer() {
-    if (finalizeTimer) clearTimeout(finalizeTimer);
-    finalizeTimer = setTimeout(finalize, FINALIZE_DELAY);
+  function resetFinalizeTimer(sid: string) {
+    const existing = finalizeTimers.get(sid);
+    if (existing) clearTimeout(existing);
+    finalizeTimers.set(
+      sid,
+      setTimeout(() => finalize(sid), FINALIZE_DELAY),
+    );
   }
+
+  const pipelineJid = opts.whatsappBridgeJid || GROUP_JID;
 
   return {
     name: 'web',
@@ -64,8 +72,8 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
       fs.mkdirSync(path.join(groupDir, 'uploads'), { recursive: true });
 
-      // Auto-register the seyoung group
-      setRegisteredGroup(GROUP_JID, {
+      // Register the pipeline JID as the single group for all sessions
+      setRegisteredGroup(pipelineJid, {
         name: 'Seyoung',
         folder: GROUP_FOLDER,
         trigger: '@Seyoung',
@@ -76,7 +84,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
 
       // Store chat metadata
       storeChatMetadata(
-        GROUP_JID,
+        pipelineJid,
         new Date().toISOString(),
         'Seyoung',
         'web',
@@ -87,8 +95,10 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       webServer = createWebServer({
         onMessage: opts.onMessage,
         getMessages: (sessionId?: string) =>
-          getChatMessages(GROUP_JID, 20, sessionId),
+          getChatMessages(pipelineJid, 20, sessionId),
         runTaskNow: opts.runTaskNow,
+        whatsappBridgeJid: opts.whatsappBridgeJid,
+        sendToWhatsApp: opts.sendToWhatsApp,
       });
 
       // Create nightly mood planning task if not exists
@@ -123,16 +133,17 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       logger.info('Web channel connected');
     },
 
-    async sendMessage(_jid: string, text: string): Promise<void> {
+    async sendMessage(
+      _jid: string,
+      text: string,
+      sessionId?: string,
+    ): Promise<void> {
       if (!webServer) return;
-
-      // Each sendMessage call is a chunk from the agent.
-      // Accumulate and send as streaming chunks.
-      responseAccumulator += (responseAccumulator ? '\n' : '') + text;
-      webServer.sendToClient(responseAccumulator, false);
-
-      // Reset debounce timer — finalize after no new chunks for 2s
-      resetFinalizeTimer();
+      const sid = sessionId || 'default';
+      const current = accumulators.get(sid) || '';
+      accumulators.set(sid, current + (current ? '\n' : '') + text);
+      webServer.sendToClient(accumulators.get(sid)!, false, sid);
+      resetFinalizeTimer(sid);
     },
 
     isConnected(): boolean {
@@ -144,7 +155,8 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
     },
 
     async disconnect(): Promise<void> {
-      if (finalizeTimer) clearTimeout(finalizeTimer);
+      for (const timer of finalizeTimers.values()) clearTimeout(timer);
+      finalizeTimers.clear();
       if (webServer) {
         webServer.close();
         webServer = null;
@@ -152,31 +164,51 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       connected = false;
     },
 
-    async setTyping(_jid: string, isTyping: boolean): Promise<void> {
+    async setTyping(
+      _jid: string,
+      isTyping: boolean,
+      sessionId?: string,
+    ): Promise<void> {
       if (!webServer) return;
+      const sid = sessionId || 'default';
       if (isTyping) {
         // Reset accumulator when typing starts (new response)
-        if (finalizeTimer) clearTimeout(finalizeTimer);
-        responseAccumulator = '';
+        const timer = finalizeTimers.get(sid);
+        if (timer) clearTimeout(timer);
+        accumulators.delete(sid);
       } else {
         // Typing ended — finalize immediately if not already done
-        if (finalizeTimer) clearTimeout(finalizeTimer);
-        finalize();
+        const timer = finalizeTimers.get(sid);
+        if (timer) clearTimeout(timer);
+        finalize(sid);
       }
-      webServer.setTyping(isTyping);
+      webServer.setTyping(isTyping, sid);
     },
 
     async setToolUse(
       _jid: string,
       tool: string,
       target?: string,
+      sessionId?: string,
     ): Promise<void> {
-      webServer?.setToolUse(tool, target);
+      webServer?.setToolUse(tool, target, sessionId || 'default');
     },
 
-    getSessionKey(groupFolder: string): string {
-      const webSessionId = webServer?.getCurrentSessionId() || 'default';
+    getSessionKey(groupFolder: string, sessionId?: string): string {
+      const webSessionId = sessionId || 'default';
       return `${groupFolder}::${webSessionId}`;
+    },
+
+    injectBridgedMessage(
+      senderName: string,
+      content: string,
+      images?: Buffer[],
+    ): void {
+      webServer?.injectBridgedMessage(senderName, content, images);
+    },
+
+    setQueued(sessionId: string, queued: boolean): void {
+      webServer?.setQueued(sessionId, queued);
     },
   };
 }

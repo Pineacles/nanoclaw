@@ -84,18 +84,31 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, text: string, sessionId?: string): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  setTyping?(jid: string, isTyping: boolean, sessionId?: string): Promise<void>;
   // Optional: real-time tool use status. Channels that support it show what the agent is doing.
-  setToolUse?(jid: string, tool: string, target?: string): Promise<void>;
+  setToolUse?(
+    jid: string,
+    tool: string,
+    target?: string,
+    sessionId?: string,
+  ): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
   // Optional: override SDK session key (e.g. per-web-session isolation).
-  getSessionKey?(groupFolder: string): string;
+  getSessionKey?(groupFolder: string, sessionId?: string): string;
+  // Optional: inject a message from another channel (WhatsApp bridge).
+  injectBridgedMessage?(
+    senderName: string,
+    content: string,
+    images?: Buffer[],
+  ): void;
+  // Optional: show queue status for a session.
+  setQueued?(sessionId: string, queued: boolean): void;
 }
 
 // Callback type that channels use to deliver inbound messages

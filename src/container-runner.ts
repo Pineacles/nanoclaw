@@ -286,7 +286,12 @@ export async function runContainerAgent(
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
   // Group folder env var so scripts like query_chats.sh know which group they belong to
-  containerArgs.splice(containerArgs.length - 1, 0, '-e', `NANOCLAW_GROUP_FOLDER=${group.folder}`);
+  containerArgs.splice(
+    containerArgs.length - 1,
+    0,
+    '-e',
+    `NANOCLAW_GROUP_FOLDER=${group.folder}`,
+  );
 
   logger.debug(
     {

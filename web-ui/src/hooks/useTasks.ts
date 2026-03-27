@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import type { TaskEvent } from './useChat';
 
 export interface Task {
   id: string;
@@ -20,8 +21,16 @@ export interface TestRunResult {
   duration_ms: number;
 }
 
+export interface TaskProgress {
+  tool: string;
+  target?: string;
+}
+
 export function useTasks(authenticated: boolean) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(new Set());
+  const [taskProgress, setTaskProgress] = useState<Record<string, TaskProgress>>({});
+  const [taskResults, setTaskResults] = useState<Record<string, TestRunResult>>({});
 
   const refresh = useCallback(async () => {
     if (!authenticated) return;
@@ -66,12 +75,11 @@ export function useTasks(authenticated: boolean) {
   );
 
   const testRun = useCallback(
-    async (taskId: string): Promise<TestRunResult> => {
-      const result = await api.post<TestRunResult>(`/api/tasks/${taskId}/run`, {});
-      refresh();
-      return result;
+    async (taskId: string) => {
+      // API returns immediately, real updates come via WebSocket
+      await api.post<{ status: string; taskId: string }>(`/api/tasks/${taskId}/run`, {});
     },
-    [refresh],
+    [],
   );
 
   const activateTask = useCallback(
@@ -82,5 +90,33 @@ export function useTasks(authenticated: boolean) {
     [refresh],
   );
 
-  return { tasks, createTask, updateTask, deleteTask, testRun, activateTask, refresh };
+  const handleTaskEvent = useCallback((event: TaskEvent) => {
+    if (event.type === 'task_started') {
+      setRunningTaskIds((prev) => new Set(prev).add(event.taskId));
+      setTaskProgress((prev) => { const next = { ...prev }; delete next[event.taskId]; return next; });
+      setTaskResults((prev) => { const next = { ...prev }; delete next[event.taskId]; return next; });
+    }
+    if (event.type === 'task_progress' && event.tool) {
+      setTaskProgress((prev) => ({ ...prev, [event.taskId]: { tool: event.tool!, target: event.target } }));
+    }
+    if (event.type === 'task_complete') {
+      setRunningTaskIds((prev) => { const next = new Set(prev); next.delete(event.taskId); return next; });
+      setTaskProgress((prev) => { const next = { ...prev }; delete next[event.taskId]; return next; });
+      setTaskResults((prev) => ({
+        ...prev,
+        [event.taskId]: {
+          status: event.status || 'success',
+          result: event.result ?? null,
+          error: event.error ?? null,
+          duration_ms: event.duration_ms ?? 0,
+        },
+      }));
+      refresh();
+    }
+  }, [refresh]);
+
+  return {
+    tasks, createTask, updateTask, deleteTask, testRun, activateTask, refresh,
+    runningTaskIds, taskProgress, taskResults, handleTaskEvent,
+  };
 }

@@ -50,7 +50,10 @@ const GROUP_JID = 'web:seyoung';
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
   getMessages: (sessionId?: string) => ReturnType<ApiDeps['getMessages']>;
-  runTaskNow?: (taskId: string, onProgress?: (event: import('./api-routes.js').TaskProgressEvent) => void) => Promise<{
+  runTaskNow?: (
+    taskId: string,
+    onProgress?: (event: import('./api-routes.js').TaskProgressEvent) => void,
+  ) => Promise<{
     status: string;
     result: string | null;
     error: string | null;
@@ -64,7 +67,11 @@ export interface WebServer {
   server: http.Server;
   wss: WebSocketServer;
   sendToClient(text: string, done: boolean, sessionId: string): void;
-  injectBridgedMessage(senderName: string, content: string, images?: Buffer[]): void;
+  injectBridgedMessage(
+    senderName: string,
+    content: string,
+    images?: Buffer[],
+  ): void;
   setTyping(isTyping: boolean, sessionId: string): void;
   setToolUse(tool: string, target?: string, sessionId?: string): void;
   setQueued(sessionId: string, queued: boolean): void;
@@ -143,21 +150,20 @@ function buildMemoryContext(): string {
 
   // Last diary entry — check if one exists from yesterday or today
   try {
-    const diaryDir = path.join(
-      process.cwd(),
-      'groups',
-      GROUP_FOLDER,
-      'diary',
-    );
+    const diaryDir = path.join(process.cwd(), 'groups', GROUP_FOLDER, 'diary');
     if (fs.existsSync(diaryDir)) {
-      const entries = fs.readdirSync(diaryDir)
+      const entries = fs
+        .readdirSync(diaryDir)
         .filter((f) => f.endsWith('.md'))
         .sort()
         .reverse();
       if (entries.length > 0) {
-        const latest = fs.readFileSync(path.join(diaryDir, entries[0]), 'utf-8').trim();
+        const latest = fs
+          .readFileSync(path.join(diaryDir, entries[0]), 'utf-8')
+          .trim();
         // Take first 300 chars of the diary as a summary
-        const snippet = latest.length > 300 ? latest.slice(0, 300) + '...' : latest;
+        const snippet =
+          latest.length > 300 ? latest.slice(0, 300) + '...' : latest;
         parts.push(`Last diary (${entries[0].replace('.md', '')}): ${snippet}`);
       }
     }
@@ -182,7 +188,11 @@ function buildMemoryContext(): string {
   return parts.length > 0 ? '\n' + parts.join('\n') : '';
 }
 
-function internalJson(res: http.ServerResponse, data: unknown, status = 200): void {
+function internalJson(
+  res: http.ServerResponse,
+  data: unknown,
+  status = 200,
+): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
@@ -204,7 +214,11 @@ async function handleInternalRoute(
   // --- Chat query ---
   if (p === '/internal/chat-query' && method === 'GET') {
     const groupFolder = url.searchParams.get('group_folder');
-    if (!groupFolder) return internalJson(res, { error: 'group_folder is required' }, 400), true;
+    if (!groupFolder)
+      return (
+        internalJson(res, { error: 'group_folder is required' }, 400),
+        true
+      );
 
     const rows = queryChatMessages({
       groupFolder,
@@ -213,14 +227,21 @@ async function handleInternalRoute(
       since: url.searchParams.get('since') || undefined,
       sender: url.searchParams.get('sender') || undefined,
     });
-    return internalJson(res, rows), true;
+    return (internalJson(res, rows), true);
   }
 
   // --- Memory save ---
   if (p === '/internal/memory-save' && method === 'POST') {
     const body = JSON.parse(await readInternalBody(req));
     if (!body.group_folder || !body.content) {
-      return internalJson(res, { error: 'group_folder and content are required' }, 400), true;
+      return (
+        internalJson(
+          res,
+          { error: 'group_folder and content are required' },
+          400,
+        ),
+        true
+      );
     }
     const id = saveMemory({
       group_folder: body.group_folder,
@@ -230,7 +251,7 @@ async function handleInternalRoute(
       tags: body.tags,
       source: body.source,
     });
-    return internalJson(res, { id }), true;
+    return (internalJson(res, { id }), true);
   }
 
   // --- Memory search ---
@@ -238,7 +259,10 @@ async function handleInternalRoute(
     const groupFolder = url.searchParams.get('group_folder');
     const query = url.searchParams.get('q');
     if (!groupFolder || !query) {
-      return internalJson(res, { error: 'group_folder and q are required' }, 400), true;
+      return (
+        internalJson(res, { error: 'group_folder and q are required' }, 400),
+        true
+      );
     }
     const results = searchMemories({
       group_folder: groupFolder,
@@ -246,7 +270,7 @@ async function handleInternalRoute(
       category: url.searchParams.get('category') || undefined,
       limit: parseInt(url.searchParams.get('limit') || '10', 10),
     });
-    return internalJson(res, results), true;
+    return (internalJson(res, results), true);
   }
 
   // --- Memory get by ID ---
@@ -254,48 +278,60 @@ async function handleInternalRoute(
     const groupFolder = url.searchParams.get('group_folder');
     const id = url.searchParams.get('id');
     if (!groupFolder || !id) {
-      return internalJson(res, { error: 'group_folder and id are required' }, 400), true;
+      return (
+        internalJson(res, { error: 'group_folder and id are required' }, 400),
+        true
+      );
     }
     const memory = getMemoryById(groupFolder, id);
-    if (!memory) return internalJson(res, { error: 'Not found' }, 404), true;
-    return internalJson(res, memory), true;
+    if (!memory) return (internalJson(res, { error: 'Not found' }, 404), true);
+    return (internalJson(res, memory), true);
   }
 
   // --- Recent memories ---
   if (p === '/internal/memory-recent' && method === 'GET') {
     const groupFolder = url.searchParams.get('group_folder');
     if (!groupFolder) {
-      return internalJson(res, { error: 'group_folder is required' }, 400), true;
+      return (
+        internalJson(res, { error: 'group_folder is required' }, 400),
+        true
+      );
     }
     const memories = getRecentMemories({
       group_folder: groupFolder,
       limit: parseInt(url.searchParams.get('limit') || '20', 10),
       since: url.searchParams.get('since') || undefined,
     });
-    return internalJson(res, memories), true;
+    return (internalJson(res, memories), true);
   }
 
   // --- Memory stats ---
   if (p === '/internal/memory-stats' && method === 'GET') {
     const groupFolder = url.searchParams.get('group_folder');
     if (!groupFolder) {
-      return internalJson(res, { error: 'group_folder is required' }, 400), true;
+      return (
+        internalJson(res, { error: 'group_folder is required' }, 400),
+        true
+      );
     }
-    return internalJson(res, getMemoryStats(groupFolder)), true;
+    return (internalJson(res, getMemoryStats(groupFolder)), true);
   }
 
   // --- Memory consolidation ---
   if (p === '/internal/memory-consolidate' && method === 'POST') {
     const body = JSON.parse(await readInternalBody(req));
     if (!body.group_folder) {
-      return internalJson(res, { error: 'group_folder is required' }, 400), true;
+      return (
+        internalJson(res, { error: 'group_folder is required' }, 400),
+        true
+      );
     }
     const count = consolidateMemories(body.group_folder, {
       olderThanDays: body.older_than_days,
       maxAccessCount: body.max_access_count,
       maxImportance: body.max_importance,
     });
-    return internalJson(res, { archived: count }), true;
+    return (internalJson(res, { archived: count }), true);
   }
 
   return false;
@@ -416,7 +452,13 @@ export function createWebServer(opts: WebServerOpts): WebServer {
   function getSessionState(sid: string): SessionState {
     let state = sessionStates.get(sid);
     if (!state) {
-      state = { typing: false, tool: null, messageId: null, content: null, queued: false };
+      state = {
+        typing: false,
+        tool: null,
+        messageId: null,
+        content: null,
+        queued: false,
+      };
       sessionStates.set(sid, state);
     }
     return state;
@@ -666,7 +708,15 @@ export function createWebServer(opts: WebServerOpts): WebServer {
       if (isTyping && state.queued) {
         // Session is no longer queued — it's being processed now
         state.queued = false;
-        broadcast({ type: 'session_state', sessionId, typing: true, tool: null, messageId: null, content: null, queued: false });
+        broadcast({
+          type: 'session_state',
+          sessionId,
+          typing: true,
+          tool: null,
+          messageId: null,
+          content: null,
+          queued: false,
+        });
       }
       if (!isTyping) {
         state.tool = null;
@@ -697,7 +747,11 @@ export function createWebServer(opts: WebServerOpts): WebServer {
      * Inject a message from WhatsApp into the web UI chat pipeline.
      * Stores the message, pushes it to WebSocket clients, and triggers the agent.
      */
-    injectBridgedMessage(senderName: string, content: string, images?: Buffer[]) {
+    injectBridgedMessage(
+      senderName: string,
+      content: string,
+      images?: Buffer[],
+    ) {
       const messageId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
       const sessionId = WHATSAPP_SESSION_ID;
@@ -706,7 +760,12 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
       // Save images to uploads and append references
       if (images && images.length > 0) {
-        const uploadsDir = path.resolve(process.cwd(), 'groups', 'seyoung', 'uploads');
+        const uploadsDir = path.resolve(
+          process.cwd(),
+          'groups',
+          'seyoung',
+          'uploads',
+        );
         fs.mkdirSync(uploadsDir, { recursive: true });
         for (const buf of images) {
           const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.jpg`;
@@ -718,8 +777,13 @@ export function createWebServer(opts: WebServerOpts): WebServer {
       // Prepend system context (same as web UI messages)
       const zurichTime = new Date().toLocaleString('en-GB', {
         timeZone: 'Europe/Zurich',
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short',
       });
       const mood = resolveMood();
       const moodLine = `Current mood: ${mood.current_mood} (energy ${mood.energy}/10)${mood.activity ? ` — currently: ${mood.activity}` : ''}`;

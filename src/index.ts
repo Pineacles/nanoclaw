@@ -64,6 +64,7 @@ import {
 } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { stripMoodTags } from './channels/web/mood.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -72,6 +73,7 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+let whatsAppBridgeJid: string | null = null;
 let messageLoopRunning = false;
 
 const channels: Channel[] = [];
@@ -165,13 +167,31 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const isMainGroup = group.isMain === true;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
-  const missedMessages = getMessagesSince(
+  const allMissedMessages = getMessagesSince(
     chatJid,
     sinceTimestamp,
     ASSISTANT_NAME,
   );
 
-  if (missedMessages.length === 0) return true;
+  if (allMissedMessages.length === 0) return true;
+
+  // Group messages by session — process one session at a time so responses
+  // go to the right place and don't interleave across sessions.
+  const sessionGroups = new Map<string, typeof allMissedMessages>();
+  for (const msg of allMissedMessages) {
+    const sid = msg.session_id || 'default';
+    const existing = sessionGroups.get(sid);
+    if (existing) existing.push(msg);
+    else sessionGroups.set(sid, [msg]);
+  }
+
+  // Pick the first session (earliest message) to process now.
+  // Advance cursor only past THIS session's messages so the rest
+  // get picked up in the next poll cycle.
+  const [sessionId, missedMessages] = sessionGroups.entries().next().value as [
+    string,
+    typeof allMissedMessages,
+  ];
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
@@ -181,22 +201,43 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         TRIGGER_PATTERN.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      // Advance cursor past this session's messages so we don't re-check them
+      lastAgentTimestamp[chatJid] =
+        missedMessages[missedMessages.length - 1].timestamp;
+      saveState();
+      // Re-enqueue if other sessions have messages
+      if (sessionGroups.size > 1) queue.enqueueMessageCheck(chatJid);
+      return true;
+    }
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
 
-  // Advance cursor so the piping path in startMessageLoop won't re-fetch
-  // these messages. Save the old cursor so we can roll back on error.
+  // Advance cursor past this session's messages only.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, sessionId, messageCount: missedMessages.length },
     'Processing messages',
   );
+
+  const webChannel = channels.find((c) => c.name === 'web');
+  const waChannel = channels.find((c) => c.name === 'whatsapp');
+  const isWhatsAppSession = sessionId === 'whatsapp';
+
+  // If other sessions have pending messages, mark them as queued and re-enqueue
+  if (sessionGroups.size > 1) {
+    for (const [sid] of sessionGroups) {
+      if (sid !== sessionId) {
+        webChannel?.setQueued?.(sid, true);
+      }
+    }
+    queue.enqueueMessageCheck(chatJid);
+  }
 
   // Track idle timer for closing stdin when agent is idle
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -212,7 +253,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
+  // Always set typing on web channel (all sessions go through the web UI)
+  await webChannel?.setTyping?.(chatJid, true, sessionId);
+  // Also set typing on WhatsApp for WhatsApp-originated sessions
+  if (isWhatsAppSession) await waChannel?.setTyping?.(chatJid, true);
+
   let hadError = false;
   let outputSentToUser = false;
 
@@ -221,16 +266,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     prompt,
     chatJid,
     async (result) => {
-      // Tool use events — forward to channel for real-time status
+      // Tool use events — forward to web channel for real-time status
       if (result.toolUse) {
         logger.debug(
           { tool: result.toolUse.tool, target: result.toolUse.target },
           'Forwarding tool use to channel',
         );
-        await channel.setToolUse?.(
+        await webChannel?.setToolUse?.(
           chatJid,
           result.toolUse.tool,
           result.toolUse.target,
+          sessionId,
         );
       }
 
@@ -247,7 +293,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           `Agent output: ${raw.slice(0, 200)}`,
         );
         if (text) {
-          await channel.sendMessage(chatJid, text);
+          // Always send to web UI (all sessions stream through it)
+          await webChannel?.sendMessage(chatJid, text, sessionId);
+          // Also send to WhatsApp for WhatsApp-originated sessions (strip mood tags)
+          if (isWhatsAppSession && waChannel) {
+            await waChannel.sendMessage(chatJid, stripMoodTags(text));
+          }
           outputSentToUser = true;
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -256,6 +307,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
       if (result.status === 'success' && !result.toolUse) {
         queue.notifyIdle(chatJid);
+        // Write close sentinel directly to end the container's IPC wait loop.
+        // Must happen here (inside the streaming callback) because runAgent
+        // won't return until the container exits — writing after would deadlock.
+        const ipcDir = path.join(
+          process.cwd(),
+          'data',
+          'ipc',
+          group.folder,
+          'input',
+        );
+        try {
+          fs.mkdirSync(ipcDir, { recursive: true });
+          fs.writeFileSync(path.join(ipcDir, '_close'), '');
+        } catch {
+          /* ignore */
+        }
       }
 
       if (result.status === 'error') {
@@ -263,9 +330,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     },
     channel,
+    sessionId,
   );
 
-  await channel.setTyping?.(chatJid, false);
+  await webChannel?.setTyping?.(chatJid, false, sessionId);
+  if (isWhatsAppSession) await waChannel?.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -297,10 +366,13 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   channel?: Channel,
+  sessionId?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionKey = channel?.getSessionKey?.(group.folder) ?? group.folder;
-  const sessionId = sessions[sessionKey];
+  const webChannel = channels.find((c) => c.name === 'web');
+  const sessionKey =
+    webChannel?.getSessionKey?.(group.folder, sessionId) ?? group.folder;
+  const sdkSessionId = sessions[sessionKey];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -343,7 +415,7 @@ async function runAgent(
       group,
       {
         prompt,
-        sessionId,
+        sessionId: sdkSessionId,
         groupFolder: group.folder,
         chatJid,
         isMain,
@@ -437,35 +509,9 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
-          // Pull all messages since lastAgentTimestamp so non-trigger
-          // context that accumulated between triggers is included.
-          const allPending = getMessagesSince(
-            chatJid,
-            lastAgentTimestamp[chatJid] || '',
-            ASSISTANT_NAME,
-          );
-          const messagesToSend =
-            allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
-
-          if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container',
-            );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
-          } else {
-            // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
-          }
+          // Don't pipe cross-session messages into a running container.
+          // Just enqueue — processGroupMessages will handle session grouping.
+          queue.enqueueMessageCheck(chatJid);
         }
       }
     } catch (err) {
@@ -583,9 +629,35 @@ async function main(): Promise<void> {
     },
   };
 
+  // WhatsApp bridge: messages from this JID get tunneled through the web UI pipeline.
+  const WHATSAPP_BRIDGE_JID = '41798463996@s.whatsapp.net';
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define -- late-bound
+  whatsAppBridgeJid = WHATSAPP_BRIDGE_JID;
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    runTaskNow: (taskId: string) => runTaskNow(taskId, schedulerDeps),
+    runTaskNow: (
+      taskId: string,
+      onProgress?: Parameters<typeof runTaskNow>[2],
+    ) => runTaskNow(taskId, schedulerDeps, onProgress),
+    // WhatsApp bridge wiring — late-bound since channels aren't connected yet
+    whatsappBridgeJid: WHATSAPP_BRIDGE_JID,
+    sendToWhatsApp: async (jid: string, text: string) => {
+      const waChannel = channels.find((c) => c.name === 'whatsapp');
+      if (waChannel) {
+        await waChannel.sendMessage(jid, text);
+      }
+    },
+    onBridgeMessage: (
+      senderName: string,
+      content: string,
+      images?: Buffer[],
+    ) => {
+      const webChannel = channels.find((c) => c.name === 'web');
+      if (webChannel?.injectBridgedMessage) {
+        webChannel.injectBridgedMessage(senderName, content, images);
+      }
+    },
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
@@ -644,6 +716,13 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+
+  // Reload registered groups — channels may have registered new groups during connect()
+  registeredGroups = getAllRegisteredGroups();
+  logger.info(
+    { groupCount: Object.keys(registeredGroups).length },
+    'Groups reloaded after channel connect',
+  );
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop(schedulerDeps);

@@ -50,7 +50,9 @@ export function SessionsPanel({
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-3 space-y-1">
-        {sessions.map((session) => (
+        {sessions.map((session) => {
+          const isWhatsApp = session.id === 'whatsapp';
+          return (
           <div
             key={session.id}
             className={`group flex items-center gap-2 px-4 py-3 rounded-xl cursor-pointer transition-all ${
@@ -115,8 +117,14 @@ export function SessionsPanel({
               </div>
             ) : (
               <>
-                <div className="w-8 h-8 rounded-full bg-surface-container-highest flex items-center justify-center shrink-0">
-                  <span className="material-symbols-outlined text-on-surface-variant text-[16px]">chat_bubble</span>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                  isWhatsApp ? 'bg-emerald-500/20' : 'bg-surface-container-highest'
+                }`}>
+                  <span className={`material-symbols-outlined text-[16px] ${
+                    isWhatsApp ? 'text-emerald-400' : 'text-on-surface-variant'
+                  }`}>
+                    {isWhatsApp ? 'smartphone' : 'chat_bubble'}
+                  </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className={`text-[13px] truncate ${
@@ -125,29 +133,32 @@ export function SessionsPanel({
                     {session.name}
                   </div>
                   <div className="text-[10px] text-on-surface-variant/60">
-                    {new Date(session.updated_at).toLocaleDateString()}
+                    {isWhatsApp ? 'Bridged from WhatsApp' : new Date(session.updated_at).toLocaleDateString()}
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    className="text-on-surface-variant hover:text-primary p-1 transition-colors"
-                    title="Rename"
-                    onClick={(e) => { e.stopPropagation(); startRename(session); }}
-                  >
-                    <span className="material-symbols-outlined text-[16px]">edit</span>
-                  </button>
-                  <button
-                    className="text-on-surface-variant hover:text-error p-1 transition-colors"
-                    title="Delete"
-                    onClick={(e) => { e.stopPropagation(); setDeletingId(session.id); }}
-                  >
-                    <span className="material-symbols-outlined text-[16px]">delete</span>
-                  </button>
-                </div>
+                {!isWhatsApp && (
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      className="text-on-surface-variant hover:text-primary p-1 transition-colors"
+                      title="Rename"
+                      onClick={(e) => { e.stopPropagation(); startRename(session); }}
+                    >
+                      <span className="material-symbols-outlined text-[16px]">edit</span>
+                    </button>
+                    <button
+                      className="text-on-surface-variant hover:text-error p-1 transition-colors"
+                      title="Delete"
+                      onClick={(e) => { e.stopPropagation(); setDeletingId(session.id); }}
+                    >
+                      <span className="material-symbols-outlined text-[16px]">delete</span>
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Task, TestRunResult } from '../hooks/useTasks';
+import type { Task, TestRunResult, TaskProgress } from '../hooks/useTasks';
 
 interface Props {
   tasks: Task[];
@@ -10,17 +10,18 @@ interface Props {
   }) => void;
   onUpdate: (id: string, updates: Partial<Task>) => void;
   onDelete: (id: string) => void;
-  onTestRun: (taskId: string) => Promise<TestRunResult>;
+  onTestRun: (taskId: string) => Promise<void>;
   onActivate: (taskId: string) => void;
+  runningTaskIds: Set<string>;
+  taskProgress: Record<string, TaskProgress>;
+  taskResults: Record<string, TestRunResult>;
 }
 
-export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onActivate }: Props) {
+export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onActivate, runningTaskIds, taskProgress, taskResults }: Props) {
   const [showNew, setShowNew] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [scheduleType, setScheduleType] = useState('once');
   const [scheduleValue, setScheduleValue] = useState('');
-  const [testResults, setTestResults] = useState<Record<string, TestRunResult | null>>({});
-  const [testing, setTesting] = useState<Record<string, boolean>>({});
 
   const handleCreate = () => {
     if (!prompt.trim()) return;
@@ -31,18 +32,10 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
   };
 
   const handleTestRun = async (taskId: string) => {
-    setTesting((prev) => ({ ...prev, [taskId]: true }));
-    setTestResults((prev) => ({ ...prev, [taskId]: null }));
     try {
-      const result = await onTestRun(taskId);
-      setTestResults((prev) => ({ ...prev, [taskId]: result }));
-    } catch (err) {
-      setTestResults((prev) => ({
-        ...prev,
-        [taskId]: { status: 'error', result: null, error: err instanceof Error ? err.message : String(err), duration_ms: 0 },
-      }));
-    } finally {
-      setTesting((prev) => ({ ...prev, [taskId]: false }));
+      await onTestRun(taskId);
+    } catch {
+      // errors come via WebSocket
     }
   };
 
@@ -147,7 +140,7 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
               )}
 
               {activeTasks.map((task) => {
-                const isTesting = testing[task.id];
+                const isRunning = runningTaskIds.has(task.id);
                 return (
                   <div key={task.id} className="bg-surface-container-high rounded-xl p-6 flex items-start justify-between group hover:bg-surface-bright transition-colors">
                     <div className="flex items-start gap-5 flex-1 min-w-0">
@@ -167,11 +160,11 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
                     <div className="flex items-center gap-3 shrink-0 ml-4">
                       <button
                         onClick={() => handleTestRun(task.id)}
-                        disabled={isTesting}
+                        disabled={isRunning}
                         className="h-8 bg-surface-container-highest rounded-lg px-4 flex items-center gap-2 text-primary text-xs font-medium hover:bg-primary/10 disabled:opacity-50 transition-colors"
                       >
-                        <span className="material-symbols-outlined text-[16px]">{isTesting ? 'progress_activity' : 'bolt'}</span>
-                        {isTesting ? 'Running...' : 'Run Now'}
+                        <span className="material-symbols-outlined text-[16px]">{isRunning ? 'progress_activity' : 'bolt'}</span>
+                        {isRunning ? 'Running...' : 'Run Now'}
                       </button>
                       <button
                         onClick={() => onUpdate(task.id, { status: 'paused' })}
@@ -235,8 +228,9 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {draftTasks.map((task) => {
-                  const result = testResults[task.id];
-                  const isTesting = testing[task.id];
+                  const result = taskResults[task.id];
+                  const isRunning = runningTaskIds.has(task.id);
+                  const progress = taskProgress[task.id];
                   return (
                     <div key={task.id} className="bg-surface-container-high rounded-xl p-6 border-l-2 border-tertiary space-y-4">
                       <p className="text-sm text-on-surface leading-relaxed">{task.prompt}</p>
@@ -254,7 +248,23 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
                         )}
                       </div>
 
-                      {result && (
+                      {/* Live progress while running */}
+                      {isRunning && (
+                        <div className="rounded-xl p-4 text-sm border-l-2 bg-primary/10 border-primary text-primary">
+                          <div className="flex items-center gap-2 font-bold mb-1">
+                            <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                            Running...
+                          </div>
+                          {progress && (
+                            <p className="opacity-80 text-xs">
+                              {progress.tool}{progress.target ? ` — ${progress.target}` : ''}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Result when done */}
+                      {!isRunning && result && (
                         <div className={`rounded-xl p-4 text-sm border-l-2 ${
                           result.status === 'success'
                             ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400'
@@ -263,8 +273,8 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
                           {result.status === 'success' ? (
                             <>
                               <div className="font-bold mb-1">Test passed</div>
-                              {result.result && <p className="opacity-80 leading-relaxed">{result.result.slice(0, 300)}</p>}
-                              <span className="text-xs opacity-60">Duration: {result.duration_ms}ms</span>
+                              {result.result && <p className="opacity-80 leading-relaxed whitespace-pre-wrap">{result.result.replace(/<\/?internal>/g, '').trim().slice(0, 500)}</p>}
+                              <span className="text-xs opacity-60">Duration: {(result.duration_ms / 1000).toFixed(1)}s</span>
                             </>
                           ) : (
                             <>
@@ -278,13 +288,13 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
                       <div className="flex gap-3">
                         <button
                           onClick={() => handleTestRun(task.id)}
-                          disabled={isTesting}
+                          disabled={isRunning}
                           className="h-9 bg-surface-container-highest rounded-xl px-5 flex items-center gap-2 text-on-surface-variant text-sm font-medium hover:text-on-surface disabled:opacity-50 transition-colors"
                         >
-                          <span className="material-symbols-outlined text-[18px]">{isTesting ? 'progress_activity' : 'play_arrow'}</span>
-                          {isTesting ? 'Testing...' : 'Test Run'}
+                          <span className="material-symbols-outlined text-[18px]">{isRunning ? 'progress_activity' : 'play_arrow'}</span>
+                          {isRunning ? 'Running...' : 'Test Run'}
                         </button>
-                        {result?.status === 'success' && (
+                        {!isRunning && result?.status === 'success' && (
                           <button
                             onClick={() => onActivate(task.id)}
                             className="h-9 bg-emerald-500/20 rounded-xl px-5 flex items-center gap-2 text-emerald-400 text-sm font-bold"

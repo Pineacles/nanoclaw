@@ -10,6 +10,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
+  downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 
 import {
@@ -33,6 +34,14 @@ export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  /** If set, messages from this JID are bridged to the web channel instead of the normal pipeline. */
+  bridgeJid?: string;
+  /** Called when a message arrives from the bridgeJid. */
+  onBridgeMessage?: (
+    senderName: string,
+    content: string,
+    images?: Buffer[],
+  ) => void;
 }
 
 export class WhatsAppChannel implements Channel {
@@ -200,6 +209,68 @@ export class WhatsAppChannel implements Channel {
             isGroup,
           );
 
+          // Bridge mode: intercept messages from the bridged JID
+          if (
+            this.opts.bridgeJid &&
+            chatJid === this.opts.bridgeJid &&
+            this.opts.onBridgeMessage
+          ) {
+            const fromMe = msg.key.fromMe || false;
+            const content =
+              normalized.conversation ||
+              normalized.extendedTextMessage?.text ||
+              normalized.imageMessage?.caption ||
+              normalized.videoMessage?.caption ||
+              '';
+
+            // Skip bot's own messages (sent by us via the bridge)
+            const isBotMessage = ASSISTANT_HAS_OWN_NUMBER
+              ? fromMe
+              : content.startsWith(`${ASSISTANT_NAME}:`);
+            if (isBotMessage) continue;
+
+            // Skip empty protocol messages
+            if (
+              !content &&
+              !normalized.imageMessage &&
+              !normalized.videoMessage
+            )
+              continue;
+
+            const senderName =
+              msg.pushName ||
+              (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
+
+            // Download media if present
+            const images: Buffer[] = [];
+            try {
+              if (normalized.imageMessage) {
+                const buf = await downloadMediaMessage(msg, 'buffer', {});
+                if (Buffer.isBuffer(buf)) images.push(buf);
+              }
+              if (normalized.videoMessage) {
+                // Videos are too large to inject — just note it in the text
+                const videoCaption = normalized.videoMessage.caption || '';
+                this.opts.onBridgeMessage(
+                  senderName,
+                  videoCaption
+                    ? `${content}\n[Video attached]`
+                    : content || '[Video attached]',
+                );
+                continue;
+              }
+            } catch (err) {
+              logger.warn({ err }, 'Failed to download WhatsApp media');
+            }
+
+            this.opts.onBridgeMessage(
+              senderName,
+              content || '',
+              images.length > 0 ? images : undefined,
+            );
+            continue;
+          }
+
           // Only deliver full message for registered groups
           const groups = this.opts.registeredGroups();
           if (groups[chatJid]) {
@@ -246,7 +317,11 @@ export class WhatsAppChannel implements Channel {
     });
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(
+    jid: string,
+    text: string,
+    _sessionId?: string,
+  ): Promise<void> {
     // Prefix bot messages with assistant name so users know who's speaking.
     // On a shared number, prefix is also needed in DMs (including self-chat)
     // to distinguish bot output from user messages.
@@ -289,7 +364,11 @@ export class WhatsAppChannel implements Channel {
     this.sock?.end(undefined);
   }
 
-  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+  async setTyping(
+    jid: string,
+    isTyping: boolean,
+    _sessionId?: string,
+  ): Promise<void> {
     try {
       const status = isTyping ? 'composing' : 'paused';
       logger.debug({ jid, status }, 'Sending presence update');
@@ -395,4 +474,12 @@ export class WhatsAppChannel implements Channel {
   }
 }
 
-registerChannel('whatsapp', (opts: ChannelOpts) => new WhatsAppChannel(opts));
+registerChannel(
+  'whatsapp',
+  (opts: ChannelOpts) =>
+    new WhatsAppChannel({
+      ...opts,
+      bridgeJid: opts.whatsappBridgeJid,
+      onBridgeMessage: opts.onBridgeMessage,
+    }),
+);

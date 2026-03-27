@@ -34,13 +34,15 @@ export default function App() {
 
   const { mood, setMood } = useMood(authenticated);
 
-  const { messages, isTyping, toolStatus, connected, sendMessage, deleteMessage } =
+  const tasks = useTasks(authenticated);
+
+  const { messages, isTyping, toolStatus, isQueued, connected, sendMessage, deleteMessage } =
     useChat(authenticated, activeSessionId, (m) =>
       setMood((prev) => ({ ...prev, current_mood: m.current_mood, energy: m.energy, activity: m.activity })),
       handleSessionRenamed,
+      tasks.handleTaskEvent,
     );
   const memory = useMemory(authenticated);
-  const tasks = useTasks(authenticated);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -70,9 +72,11 @@ export default function App() {
             messages={messages}
             isTyping={isTyping}
             toolStatus={toolStatus}
+            isQueued={isQueued}
             connected={connected}
             onSend={sendMessage}
             onDelete={deleteMessage}
+            readOnly={activeSessionId === 'whatsapp'}
           />
         );
       case 'memory':
@@ -97,6 +101,9 @@ export default function App() {
             onDelete={tasks.deleteTask}
             onTestRun={tasks.testRun}
             onActivate={tasks.activateTask}
+            runningTaskIds={tasks.runningTaskIds}
+            taskProgress={tasks.taskProgress}
+            taskResults={tasks.taskResults}
           />
         );
       case 'actions':
