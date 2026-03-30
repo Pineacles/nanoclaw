@@ -1,8 +1,14 @@
 import { useCallback, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
+interface Attachment {
+  name: string;
+  dataUri: string;
+  isImage: boolean;
+}
+
 interface Props {
-  onSend: (content: string, images?: string[]) => void;
+  onSend: (content: string, images?: string[], files?: { name: string; data: string }[]) => void;
   disabled?: boolean;
 }
 
@@ -33,22 +39,45 @@ function resizeImage(file: File, maxSize: number): Promise<string> {
   });
 }
 
+function readFileAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function InputBar({ onSend, disabled }: Props) {
   const [text, setText] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textareaRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSend = useCallback(() => {
     const content = text.trim();
-    if (!content && images.length === 0) return;
-    onSend(content, images.length > 0 ? images : undefined);
+    if (!content && attachments.length === 0) return;
+
+    const images = attachments.filter((a) => a.isImage).map((a) => a.dataUri);
+    const files = attachments.filter((a) => !a.isImage).map((a) => ({ name: a.name, data: a.dataUri }));
+
+    onSend(
+      content,
+      images.length > 0 ? images : undefined,
+      files.length > 0 ? files : undefined,
+    );
     setText('');
-    setImages([]);
+    setAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.value = '';
     }
-  }, [text, images, onSend]);
+  }, [text, attachments, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -60,68 +89,79 @@ export function InputBar({ onSend, disabled }: Props) {
     [handleSend],
   );
 
-  const addImages = useCallback(async (files: FileList | File[]) => {
-    const processed: string[] = [];
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    const processed: Attachment[] = [];
     for (const file of Array.from(files)) {
-      if (!file.type.startsWith('image/')) continue;
-      const dataUri = await resizeImage(file, 1568);
-      processed.push(dataUri);
+      if (file.type.startsWith('image/')) {
+        const dataUri = await resizeImage(file, 1568);
+        processed.push({ name: file.name, dataUri, isImage: true });
+      } else {
+        const dataUri = await readFileAsDataUri(file);
+        processed.push({ name: file.name, dataUri, isImage: false });
+      }
     }
-    setImages((prev) => [...prev, ...processed]);
+    setAttachments((prev) => [...prev, ...processed]);
   }, []);
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
-      const imageFiles: File[] = [];
+      const pastedFiles: File[] = [];
       for (const item of Array.from(items)) {
-        if (item.type.startsWith('image/')) {
+        if (item.kind === 'file') {
           const file = item.getAsFile();
-          if (file) imageFiles.push(file);
+          if (file) pastedFiles.push(file);
         }
       }
-      if (imageFiles.length > 0) {
+      if (pastedFiles.length > 0) {
         e.preventDefault();
-        addImages(imageFiles);
+        addFiles(pastedFiles);
       }
     },
-    [addImages],
+    [addFiles],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       if (e.dataTransfer?.files) {
-        addImages(e.dataTransfer.files);
+        addFiles(e.dataTransfer.files);
       }
     },
-    [addImages],
+    [addFiles],
   );
 
-  const hasContent = text.trim() || images.length > 0;
+  const hasContent = text.trim() || attachments.length > 0;
 
   return (
     <div
-      className="px-12 pb-6 pt-3"
+      className="px-3 sm:px-8 md:px-12 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-6 pt-2 sm:pt-3"
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
     >
       <div className="max-w-3xl mx-auto">
-        {/* Image previews */}
-        {images.length > 0 && (
+        {/* Attachment previews */}
+        {attachments.length > 0 && (
           <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
-            {images.map((img, i) => (
-              <div key={i} className="relative shrink-0 w-14 h-14">
-                <img
-                  src={img}
-                  alt=""
-                  className="w-14 h-14 object-cover rounded-lg border border-outline-variant/20"
-                />
+            {attachments.map((att, i) => (
+              <div key={i} className="relative shrink-0">
+                {att.isImage ? (
+                  <img
+                    src={att.dataUri}
+                    alt=""
+                    className="w-14 h-14 object-cover rounded-lg border border-outline-variant/20"
+                  />
+                ) : (
+                  <div className="h-14 px-3 flex items-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container max-w-[180px]">
+                    <span className="material-symbols-outlined text-[18px] text-on-surface-variant/60 shrink-0">description</span>
+                    <span className="text-xs text-on-surface-variant truncate">{att.name}</span>
+                  </div>
+                )}
                 <button
                   className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-error
                     rounded-full flex items-center justify-center shadow-md"
-                  onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
+                  onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
                 >
                   <X size={10} className="text-white" />
                 </button>
@@ -131,24 +171,26 @@ export function InputBar({ onSend, disabled }: Props) {
         )}
 
         {/* Input row — all three elements (input box, send button) share the same 48px height */}
-        <div className="flex gap-3">
-          <div className="flex-1 h-12 flex items-center bg-surface-container-high border border-outline-variant/20 rounded-2xl
+        <div className="flex gap-2 sm:gap-3">
+          <div className="flex-1 h-11 sm:h-12 flex items-center bg-surface-container-high border border-outline-variant/20 rounded-2xl
             focus-within:border-primary/40 transition-colors overflow-hidden">
             {/* Attach */}
             <button
-              className="h-12 w-12 flex items-center justify-center text-on-surface-variant/50 hover:text-on-surface-variant transition-colors shrink-0"
+              className="h-11 sm:h-12 w-10 sm:w-12 flex items-center justify-center text-on-surface-variant/50 hover:text-on-surface-variant transition-colors shrink-0"
               onClick={() => fileInputRef.current?.click()}
-              title="Attach image"
+              title="Attach file"
             >
-              <span className="material-symbols-outlined text-[20px]">image</span>
+              <span className="material-symbols-outlined text-[20px]">attach_file</span>
             </button>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
               multiple
               className="hidden"
-              onChange={(e) => e.target.files && addImages(e.target.files)}
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = '';
+              }}
             />
 
             {/* Text input — single line input, not textarea */}
@@ -159,9 +201,9 @@ export function InputBar({ onSend, disabled }: Props) {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Message Seyoung..."
+              placeholder="Send a message..."
               disabled={disabled}
-              className="flex-1 h-12 bg-transparent text-on-surface text-sm
+              className="flex-1 h-11 sm:h-12 bg-transparent text-on-surface text-sm
                 placeholder:text-on-surface-variant/40 focus:outline-none border-none disabled:opacity-50 pr-3"
             />
           </div>
@@ -170,7 +212,7 @@ export function InputBar({ onSend, disabled }: Props) {
           <button
             onClick={handleSend}
             disabled={disabled || !hasContent}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0
+            className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0
               transition-all duration-200 active:scale-90
               ${hasContent && !disabled
                 ? 'signature-glow shadow-[0_4px_16px_rgba(255,120,78,0.35)] hover:shadow-[0_4px_24px_rgba(255,120,78,0.5)]'

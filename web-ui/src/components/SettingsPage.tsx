@@ -31,17 +31,17 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="p-12 max-w-4xl mx-auto w-full space-y-12">
+      <div className="p-4 sm:p-8 md:p-12 max-w-4xl mx-auto w-full space-y-8 sm:space-y-12">
         {/* Hero Header */}
         <section className="space-y-2">
-          <h1 className="text-5xl font-black text-on-background tracking-tighter">Settings</h1>
-          <p className="text-on-surface-variant text-lg">Calibrate your intimate digital experience.</p>
+          <h1 className="text-3xl sm:text-5xl font-black text-on-background tracking-tighter">Settings</h1>
+          <p className="text-on-surface-variant text-sm sm:text-lg">Calibrate your intimate digital experience.</p>
         </section>
 
         {/* Bento Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-8">
           {/* Authentication Card */}
-          <div className="col-span-12 md:col-span-7 bg-surface-container rounded-[1rem] p-10 inner-thought-glow border-l-4 border-primary">
+          <div className="col-span-12 md:col-span-7 bg-surface-container rounded-[1rem] p-6 sm:p-10 inner-thought-glow border-l-4 border-primary">
             <div className="flex items-center gap-4 mb-8">
               <div className="p-3 bg-primary/20 rounded-full text-primary">
                 <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>lock</span>
@@ -77,7 +77,7 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
           </div>
 
           {/* Identity Summary Card */}
-          <div className="col-span-12 md:col-span-5 bg-surface-container-low rounded-[1rem] p-10 flex flex-col justify-between overflow-hidden relative">
+          <div className="col-span-12 md:col-span-5 bg-surface-container-low rounded-[1rem] p-6 sm:p-10 flex flex-col justify-between overflow-hidden relative">
             <div className="absolute -top-10 -right-10 w-40 h-40 bg-primary/5 rounded-full blur-3xl" />
             <div className="relative z-10">
               <h3 className="text-lg font-bold mb-4">Connection Status</h3>
@@ -104,7 +104,7 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
           </div>
 
           {/* Model Selection */}
-          <div className="col-span-12 md:col-span-6 bg-surface-container-high rounded-[1rem] p-8 space-y-6">
+          <div className="col-span-12 md:col-span-6 bg-surface-container-high rounded-[1rem] p-5 sm:p-8 space-y-6">
             <h3 className="font-bold text-on-surface flex items-center gap-3">
               <span className="material-symbols-outlined text-primary">psychology</span>
               Model
@@ -150,7 +150,7 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
           </div>
 
           {/* Features */}
-          <div className="col-span-12 md:col-span-6 bg-surface-container rounded-[1rem] p-8 space-y-6">
+          <div className="col-span-12 md:col-span-6 bg-surface-container rounded-[1rem] p-5 sm:p-8 space-y-6">
             <h3 className="font-bold text-on-surface flex items-center gap-3">
               <span className="material-symbols-outlined text-primary">tune</span>
               Features
@@ -159,7 +159,7 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
               <div className="flex justify-between items-center p-4 bg-surface-container-high rounded-xl">
                 <div>
                   <span className="text-sm font-medium text-on-surface">Web Search</span>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Allow her to search the web for current info</p>
+                  <p className="text-xs text-on-surface-variant mt-0.5">Allow the agent to search the web for current info</p>
                 </div>
                 <button
                   onClick={() => setSettings((s) => ({ ...s, perplexity_enabled: !s.perplexity_enabled }))}
@@ -188,7 +188,7 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
         {/* Footer */}
         <footer className="pt-8 border-t border-outline-variant/10 flex justify-between items-center text-on-surface-variant">
           <div className="flex items-center gap-4">
-            <span className="text-[10px] uppercase tracking-widest font-bold">Ethernal Assistant</span>
+            <span className="text-[10px] uppercase tracking-widest font-bold">NanoClaw</span>
             <span className="h-1 w-1 rounded-full bg-outline-variant" />
             <span className="text-[10px] uppercase tracking-widest font-bold">End-to-End Encrypted</span>
           </div>

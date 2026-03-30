@@ -8,21 +8,36 @@ interface Props {
   onViewChange: (view: View) => void;
   mood: MoodData;
   sessionList: React.ReactNode;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 const NAV_ITEMS: { key: View; icon: string; label: string }[] = [
   { key: 'sessions', icon: 'chat_bubble', label: 'Sessions' },
-  { key: 'memory', icon: 'auto_awesome', label: 'Her Thoughts' },
+  { key: 'memory', icon: 'auto_awesome', label: 'Memory' },
   { key: 'tasks', icon: 'settings_remote', label: 'Background Jobs' },
   { key: 'actions', icon: 'bolt', label: 'Quick Actions' },
   { key: 'settings', icon: 'settings', label: 'Settings' },
 ];
 
-export function Sidebar({ activeView, onViewChange, mood, sessionList }: Props) {
+export function Sidebar({ activeView, onViewChange, mood, sessionList, mobileOpen, onMobileClose }: Props) {
   return (
-    <nav className="fixed left-0 top-0 h-screen w-72 flex flex-col py-8 px-5 z-40 bg-surface rounded-r-xl shadow-[40px_0_60px_-15px_rgba(0,0,0,0.3)]">
-      {/* Brand */}
-      <div className="text-2xl font-black text-primary mb-10 px-2">Ethernal Assistant</div>
+    <nav className={`
+      fixed left-0 top-0 h-dvh w-72 flex flex-col py-6 lg:py-8 px-5 z-40 bg-surface rounded-r-xl shadow-[40px_0_60px_-15px_rgba(0,0,0,0.3)]
+      transition-transform duration-300 ease-out
+      ${mobileOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0
+    `}>
+      {/* Brand + close */}
+      <div className="flex items-center justify-between mb-8 lg:mb-10 px-2">
+        <div className="text-2xl font-black text-primary">NanoClaw</div>
+        {/* Mobile close button */}
+        <button
+          className="lg:hidden w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors"
+          onClick={onMobileClose}
+        >
+          <span className="material-symbols-outlined text-on-surface-variant text-[20px]">close</span>
+        </button>
+      </div>
 
       {/* Navigation */}
       <div className="flex flex-col gap-1 mb-4">

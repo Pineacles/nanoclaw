@@ -50,21 +50,21 @@ export function MemoryPage({
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="p-12 max-w-6xl mx-auto w-full">
+      <div className="p-4 sm:p-8 md:p-12 max-w-6xl mx-auto w-full">
         {/* Hero Header */}
-        <section className="mb-12">
-          <h1 className="text-5xl font-black tracking-tighter mb-4 text-on-background">
-            Her <span className="text-primary italic">Thoughts</span>
+        <section className="mb-6 sm:mb-12">
+          <h1 className="text-3xl sm:text-5xl font-black tracking-tighter mb-3 sm:mb-4 text-on-background">
+            Agent <span className="text-primary italic">Memory</span>
           </h1>
-          <p className="text-on-surface-variant text-lg max-w-xl leading-relaxed">
-            Memory files that shape her personality, knowledge, and inner world. Edit with care — these define who she is.
+          <p className="text-on-surface-variant text-sm sm:text-lg max-w-xl leading-relaxed">
+            Memory files that shape the agent's knowledge and behavior. Edit with care — these define how it responds.
           </p>
         </section>
 
         {/* Bento Grid */}
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-12 gap-4 sm:gap-8">
           {/* File List Panel */}
-          <div className="col-span-12 md:col-span-4 bg-surface-container rounded-[1rem] p-6 flex flex-col max-h-[600px]">
+          <div className="col-span-12 md:col-span-4 bg-surface-container rounded-[1rem] p-4 sm:p-6 flex flex-col max-h-[400px] sm:max-h-[600px]">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-bold">Memory Files</h2>
               <button
@@ -126,15 +126,15 @@ export function MemoryPage({
           </div>
 
           {/* Content Viewer / Editor */}
-          <div className="col-span-12 md:col-span-8 bg-surface-container rounded-[1rem] p-6 flex flex-col min-h-[400px] max-h-[600px]">
+          <div className="col-span-12 md:col-span-8 bg-surface-container rounded-[1rem] p-4 sm:p-6 flex flex-col min-h-[300px] sm:min-h-[400px] max-h-[500px] sm:max-h-[600px]">
             {selectedFile ? (
               <>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary">edit_document</span>
-                    <h2 className="text-lg font-bold">{selectedFile}</h2>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="material-symbols-outlined text-primary shrink-0">edit_document</span>
+                    <h2 className="text-base sm:text-lg font-bold truncate">{selectedFile}</h2>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 shrink-0">
                     {editing ? (
                       <>
                         <button onClick={saveEdit} className="h-[34px] signature-glow text-on-primary-fixed text-sm font-bold px-5 rounded-xl shadow-lg active:scale-[0.98] transition-transform">
@@ -199,7 +199,7 @@ export function MemoryPage({
                 <div className="text-center">
                   <span className="material-symbols-outlined text-on-surface-variant/30 text-6xl mb-4 block">auto_awesome</span>
                   <p className="text-on-surface-variant text-lg">Select a memory file to view its contents</p>
-                  <p className="text-on-surface-variant/60 text-sm mt-2">These files shape her personality and knowledge</p>
+                  <p className="text-on-surface-variant/60 text-sm mt-2">These files shape the agent's knowledge and behavior</p>
                 </div>
               </div>
             )}

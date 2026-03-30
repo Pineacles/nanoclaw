@@ -22,7 +22,7 @@ export function ToolStatus({ status }: Props) {
   }, [status.tool]);
 
   return (
-    <div className="flex justify-start ml-12 mb-2">
+    <div className="flex justify-start ml-4 sm:ml-12 mb-2">
       <div className="bg-tertiary/10 border border-tertiary/20 rounded-full px-4 py-1.5
         flex items-center gap-2 shadow-sm animate-pulse">
         <span className="material-symbols-outlined text-tertiary-dim text-[16px]">{display.icon}</span>

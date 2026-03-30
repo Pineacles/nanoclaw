@@ -423,6 +423,55 @@ export function createWebServer(opts: WebServerOpts): WebServer {
       return;
     }
 
+    // Serve uploaded files — /uploads/<filename>
+    if (url.pathname.startsWith('/uploads/')) {
+      if (!verifyAuth(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      const filename = path.basename(url.pathname.slice('/uploads/'.length));
+      if (!filename || filename.includes('..')) {
+        res.writeHead(400);
+        res.end('Bad request');
+        return;
+      }
+      const filePath = path.resolve(process.cwd(), 'groups', 'seyoung', 'uploads', filename);
+      if (!filePath.startsWith(path.resolve(process.cwd(), 'groups', 'seyoung', 'uploads')) || !fs.existsSync(filePath)) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+      const ext = path.extname(filename).toLowerCase();
+      const UPLOAD_MIME: Record<string, string> = {
+        ...MIME_TYPES,
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.csv': 'text/csv',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.mp4': 'video/mp4',
+        '.mp3': 'audio/mpeg',
+        '.ogg': 'audio/ogg',
+        '.wav': 'audio/wav',
+        '.zip': 'application/zip',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      };
+      const contentType = UPLOAD_MIME[ext] || 'application/octet-stream';
+      const content = fs.readFileSync(filePath);
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      });
+      res.end(content);
+      return;
+    }
+
     // Static file serving
     serveStatic(res, url.pathname, staticDir);
   });
@@ -525,6 +574,27 @@ export function createWebServer(opts: WebServerOpts): WebServer {
               const buffer = Buffer.from(matches[2], 'base64');
               fs.writeFileSync(path.join(uploadsDir, filename), buffer);
               content += `\n[Image: /workspace/group/uploads/${filename}]`;
+            }
+          }
+
+          // Handle generic file attachments
+          if (msg.files && msg.files.length > 0) {
+            const uploadsDir = path.resolve(
+              process.cwd(),
+              'groups',
+              'seyoung',
+              'uploads',
+            );
+            fs.mkdirSync(uploadsDir, { recursive: true });
+
+            for (const file of msg.files) {
+              const matches = file.data.match(/^data:([^;]+);base64,(.+)$/);
+              if (!matches) continue;
+              const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+              const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${safeName}`;
+              const buffer = Buffer.from(matches[2], 'base64');
+              fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+              content += `\n[File: /workspace/group/uploads/${filename}]`;
             }
           }
 

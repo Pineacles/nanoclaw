@@ -69,7 +69,7 @@ export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
     };
   }, [connect]);
 
-  const send = useCallback((data: { type: string; content?: string; images?: string[]; sessionId?: string }) => {
+  const send = useCallback((data: { type: string; content?: string; images?: string[]; files?: { name: string; data: string }[]; sessionId?: string }) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
     }

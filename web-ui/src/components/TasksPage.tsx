@@ -45,25 +45,25 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="p-12 max-w-6xl mx-auto w-full">
+      <div className="p-4 sm:p-8 md:p-12 max-w-6xl mx-auto w-full">
         {/* Hero Header */}
-        <section className="mb-12">
-          <h1 className="text-5xl font-black tracking-tighter mb-4 text-on-background">
+        <section className="mb-6 sm:mb-12">
+          <h1 className="text-3xl sm:text-5xl font-black tracking-tighter mb-3 sm:mb-4 text-on-background">
             Background <span className="text-primary italic">Jobs</span>
           </h1>
-          <p className="text-on-surface-variant text-lg max-w-xl leading-relaxed">
-            While we rest or connect, she works quietly in the background. These are the proactive threads of your digital life.
+          <p className="text-on-surface-variant text-sm sm:text-lg max-w-xl leading-relaxed">
+            Scheduled and recurring tasks running in the background. Cron jobs, reviews, and automated workflows.
           </p>
         </section>
 
         {/* Bento Grid */}
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-12 gap-4 sm:gap-8">
           {/* Active Operations (Large Card) */}
-          <div className="col-span-12 md:col-span-8 bg-surface-container rounded-[1rem] p-8 flex flex-col min-h-[400px]">
-            <div className="flex justify-between items-start mb-8">
+          <div className="col-span-12 md:col-span-8 bg-surface-container rounded-[1rem] p-4 sm:p-8 flex flex-col min-h-[300px] sm:min-h-[400px]">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 sm:gap-0 mb-6 sm:mb-8">
               <div>
                 <h2 className="text-2xl font-bold mb-1">Active Operations</h2>
-                <p className="text-on-surface-variant text-sm">Threads currently running in her core</p>
+                <p className="text-on-surface-variant text-sm">Currently running tasks</p>
               </div>
               <div className="flex items-center gap-3">
                 <span className="bg-primary/10 text-primary px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest">
@@ -142,9 +142,9 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
               {activeTasks.map((task) => {
                 const isRunning = runningTaskIds.has(task.id);
                 return (
-                  <div key={task.id} className="bg-surface-container-high rounded-xl p-6 flex items-start justify-between group hover:bg-surface-bright transition-colors">
-                    <div className="flex items-start gap-5 flex-1 min-w-0">
-                      <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
+                  <div key={task.id} className="bg-surface-container-high rounded-xl p-4 sm:p-6 flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between group hover:bg-surface-bright transition-colors">
+                    <div className="flex items-start gap-3 sm:gap-5 flex-1 min-w-0">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
                         <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>
                           {task.schedule_type === 'cron' ? 'schedule' : task.schedule_type === 'interval' ? 'autorenew' : 'play_arrow'}
                         </span>
@@ -157,7 +157,7 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                    <div className="flex items-center gap-2 sm:gap-3 shrink-0 sm:ml-4 flex-wrap">
                       <button
                         onClick={() => handleTestRun(task.id)}
                         disabled={isRunning}
@@ -188,7 +188,7 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
           </div>
 
           {/* Status Summary Card */}
-          <div className="col-span-12 md:col-span-4 bg-surface-container-high rounded-[1rem] p-8 flex flex-col">
+          <div className="col-span-12 md:col-span-4 bg-surface-container-high rounded-[1rem] p-5 sm:p-8 flex flex-col">
             <h3 className="text-xl font-bold mb-8">System Health</h3>
             <div className="flex-grow space-y-6">
               <div className="grid grid-cols-2 gap-4">
@@ -219,9 +219,9 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
 
           {/* Draft Jobs */}
           {draftTasks.length > 0 && (
-            <div className="col-span-12 bg-surface-container rounded-[1rem] p-8">
-              <div className="flex items-center gap-3 mb-6">
-                <h2 className="text-2xl font-bold">Draft Jobs</h2>
+            <div className="col-span-12 bg-surface-container rounded-[1rem] p-4 sm:p-8">
+              <div className="flex items-center gap-3 mb-4 sm:mb-6">
+                <h2 className="text-xl sm:text-2xl font-bold">Draft Jobs</h2>
                 <span className="bg-tertiary/20 text-tertiary-dim px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest">
                   Needs Testing
                 </span>
@@ -320,8 +320,8 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, onAc
 
           {/* Paused / Completed Jobs */}
           {otherTasks.length > 0 && (
-            <div className="col-span-12 bg-surface-container rounded-[1rem] p-8">
-              <h2 className="text-2xl font-bold mb-6">Paused &amp; Completed</h2>
+            <div className="col-span-12 bg-surface-container rounded-[1rem] p-4 sm:p-8">
+              <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Paused &amp; Completed</h2>
               <div className="space-y-3">
                 {otherTasks.map((task) => (
                   <div key={task.id} className="flex items-center gap-4 p-4 rounded-xl hover:bg-surface-container-high transition-colors">

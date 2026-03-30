@@ -48,20 +48,20 @@ export function QuickActionsPage({ onSend, authenticated }: Props) {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="p-12 max-w-6xl mx-auto w-full">
+      <div className="p-4 sm:p-8 md:p-12 max-w-6xl mx-auto w-full">
         {/* Hero Header */}
-        <section className="mb-12">
-          <h1 className="text-5xl font-black tracking-tighter mb-4 text-on-background">
+        <section className="mb-6 sm:mb-12">
+          <h1 className="text-3xl sm:text-5xl font-black tracking-tighter mb-3 sm:mb-4 text-on-background">
             Quick <span className="text-primary italic">Actions</span>
           </h1>
-          <p className="text-on-surface-variant text-lg max-w-xl leading-relaxed">
+          <p className="text-on-surface-variant text-sm sm:text-lg max-w-xl leading-relaxed">
             One-tap shortcuts to your most common requests. Click any action to send it instantly.
           </p>
         </section>
 
         {/* New action form */}
         {showNew && (
-          <div className="bg-surface-container rounded-[1rem] p-8 mb-8 border border-outline-variant/10 max-w-2xl">
+          <div className="bg-surface-container rounded-[1rem] p-5 sm:p-8 mb-6 sm:mb-8 border border-outline-variant/10 max-w-2xl">
             <h2 className="text-lg font-bold mb-4">Create New Action</h2>
             <div className="space-y-4">
               <div>
@@ -104,12 +104,12 @@ export function QuickActionsPage({ onSend, authenticated }: Props) {
         )}
 
         {/* Actions Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
           {/* Add New Card */}
           <button
             onClick={() => setShowNew(!showNew)}
-            className="bg-surface-container rounded-[1rem] p-6 border border-dashed border-outline-variant/30
-              flex flex-col items-center justify-center gap-3 min-h-[160px]
+            className="bg-surface-container rounded-[1rem] p-5 sm:p-6 border border-dashed border-outline-variant/30
+              flex flex-col items-center justify-center gap-3 min-h-[120px] sm:min-h-[160px]
               hover:border-primary/40 hover:bg-surface-container-high transition-all group"
           >
             <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
@@ -121,8 +121,8 @@ export function QuickActionsPage({ onSend, authenticated }: Props) {
           {actions.map((action) => (
             <div
               key={action.id}
-              className="relative bg-surface-container rounded-[1rem] p-6 border border-outline-variant/10
-                flex flex-col items-center justify-center gap-4 min-h-[160px]
+              className="relative bg-surface-container rounded-[1rem] p-5 sm:p-6 border border-outline-variant/10
+                flex flex-col items-center justify-center gap-3 sm:gap-4 min-h-[120px] sm:min-h-[160px]
                 hover:bg-surface-container-high hover:shadow-[0_4px_20px_rgba(255,144,109,0.1)] transition-all group cursor-pointer"
               onClick={() => onSend(action.prompt)}
             >

@@ -237,7 +237,7 @@ export function useChat(
   }, [connected, activeSessionId, send]);
 
   const sendMessage = useCallback(
-    (content: string, images?: string[]) => {
+    (content: string, images?: string[], files?: { name: string; data: string }[]) => {
       const id = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
@@ -248,7 +248,7 @@ export function useChat(
       ]);
 
       // Send via WebSocket with sessionId
-      send({ type: 'chat', content, images, sessionId: activeSessionId });
+      send({ type: 'chat', content, images, files, sessionId: activeSessionId });
     },
     [send, activeSessionId],
   );
