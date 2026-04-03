@@ -457,7 +457,12 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
-      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status' | 'context_mode'
+      | 'prompt'
+      | 'schedule_type'
+      | 'schedule_value'
+      | 'next_run'
+      | 'status'
+      | 'context_mode'
     >
   >,
 ): void {
@@ -562,7 +567,7 @@ export function getSuccessfulRunCount(taskId: string): number {
  */
 export function getChatMessages(
   chatJid: string,
-  limit: number = 100,
+  limit: number = 5000,
   sessionId?: string,
 ): Array<{
   id: string;

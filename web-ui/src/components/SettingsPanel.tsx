@@ -104,7 +104,7 @@ export function SettingsPanel({ authenticated, onAuthChange }: Props) {
           Enable web search
         </label>
         <div className="text-[10px] text-on-surface-variant leading-relaxed">
-          Allows her to search the web for current information
+          Allows the agent to search the web for current information
         </div>
       </div>
 

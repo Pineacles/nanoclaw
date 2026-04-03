@@ -28,6 +28,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   systemInstruction?: string;
+  skipIdentity?: boolean;
 }
 
 interface ContainerOutput {
@@ -375,21 +376,24 @@ async function runQuery(
   let resultCount = 0;
 
   // Build system prompt appendix from global CLAUDE.md and per-channel system instructions
+  // When skipIdentity is true, skip all persona/identity injection (CLAUDE.md, .system-prompt)
   const systemAppendParts: string[] = [];
 
-  // Global CLAUDE.md (shared across all non-main groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    systemAppendParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
-  }
+  if (!containerInput.skipIdentity) {
+    // Global CLAUDE.md (shared across all non-main groups)
+    const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+    if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+      systemAppendParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
+    }
 
-  // Per-channel system instruction (passed from host or read from group folder)
-  if (containerInput.systemInstruction) {
-    systemAppendParts.push(containerInput.systemInstruction);
-  }
-  const groupSystemPromptPath = '/workspace/group/.system-prompt';
-  if (fs.existsSync(groupSystemPromptPath)) {
-    systemAppendParts.push(fs.readFileSync(groupSystemPromptPath, 'utf-8'));
+    // Per-channel system instruction (passed from host or read from group folder)
+    if (containerInput.systemInstruction) {
+      systemAppendParts.push(containerInput.systemInstruction);
+    }
+    const groupSystemPromptPath = '/workspace/group/.system-prompt';
+    if (fs.existsSync(groupSystemPromptPath)) {
+      systemAppendParts.push(fs.readFileSync(groupSystemPromptPath, 'utf-8'));
+    }
   }
 
   const systemAppend = systemAppendParts.length > 0
@@ -412,11 +416,18 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // When identity is disabled, temporarily hide CLAUDE.md so the SDK doesn't auto-load it
+  const claudeMdPath = '/workspace/group/CLAUDE.md';
+  const claudeMdBackup = '/workspace/group/.CLAUDE.md.identity-off';
+  if (containerInput.skipIdentity && fs.existsSync(claudeMdPath)) {
+    fs.renameSync(claudeMdPath, claudeMdBackup);
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
       cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+      additionalDirectories: (!containerInput.skipIdentity && extraDirs.length > 0) ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
       systemPrompt: systemAppend
@@ -523,6 +534,11 @@ async function runQuery(
     }
   }
 
+  // Restore CLAUDE.md if it was hidden for identity-off mode
+  if (containerInput.skipIdentity && fs.existsSync(claudeMdBackup)) {
+    fs.renameSync(claudeMdBackup, claudeMdPath);
+  }
+
   ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
@@ -560,7 +576,8 @@ async function main(): Promise<void> {
 
   // Build initial prompt (drain any pending IPC messages too)
   // Check if this group uses a character persona (has .system-prompt file)
-  const hasCharacterPersona = fs.existsSync('/workspace/group/.system-prompt');
+  // Skip persona when identity is disabled for this session
+  const hasCharacterPersona = !containerInput.skipIdentity && fs.existsSync('/workspace/group/.system-prompt');
 
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {

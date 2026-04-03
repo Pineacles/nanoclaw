@@ -21,9 +21,9 @@ import { CronExpressionParser } from 'cron-parser';
 import { computeNextRun } from '../../task-scheduler.js';
 import { logger } from '../../logger.js';
 import { resolveMood } from './mood.js';
-
-const GROUP_FOLDER = 'seyoung';
-const GROUP_JID = 'web:seyoung';
+import { getGroupFolder, getGroupJid, getGroupDir as getGroupDirConfig, getGroupConfig, reloadGroupConfig } from './group-config.js';
+import { listContextFiles, readContextFile, writeContextFile, deleteContextFile } from './context-loader.js';
+import { buildAgentContext, getSessionContext, saveSessionContext, deleteSessionContext } from './context-builder.js';
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -43,7 +43,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 function groupDir(): string {
-  return path.join(GROUPS_DIR, GROUP_FOLDER);
+  return getGroupDirConfig();
 }
 
 // --- Messages ---
@@ -75,21 +75,21 @@ function handleDeleteMessage(
   res: ServerResponse,
   messageId: string,
 ): void {
-  const msg = getMessageById(messageId, GROUP_JID);
+  const msg = getMessageById(messageId, getGroupJid());
   if (!msg) return error(res, 'Message not found', 404);
 
   const deletedIds: string[] = [messageId];
 
   // If user message, also delete the next bot response
   if (msg.is_bot_message === 0) {
-    const nextBot = getNextBotMessage(GROUP_JID, msg.timestamp, msg.session_id);
+    const nextBot = getNextBotMessage(getGroupJid(), msg.timestamp, msg.session_id);
     if (nextBot) {
-      deleteMessage(nextBot.id, GROUP_JID);
+      deleteMessage(nextBot.id, getGroupJid());
       deletedIds.push(nextBot.id);
     }
   }
 
-  deleteMessage(messageId, GROUP_JID);
+  deleteMessage(messageId, getGroupJid());
   json(res, { ok: true, deletedIds });
 }
 
@@ -128,6 +128,7 @@ function handleSessionDelete(
     return error(res, 'Cannot delete the WhatsApp session', 403);
   }
   deleteWebSession(sessionId);
+  deleteSessionContext(sessionId);
   json(res, { ok: true });
 }
 
@@ -228,7 +229,7 @@ async function handleMemoryCreate(
 // --- Tasks ---
 
 function handleTasksList(_req: IncomingMessage, res: ServerResponse): void {
-  const tasks = getTasksForGroup(GROUP_FOLDER);
+  const tasks = getTasksForGroup(getGroupFolder());
   json(res, tasks);
 }
 
@@ -254,8 +255,8 @@ async function handleTaskCreate(
 
   const task = {
     id: crypto.randomUUID(),
-    group_folder: GROUP_FOLDER,
-    chat_jid: GROUP_JID,
+    group_folder: getGroupFolder(),
+    chat_jid: getGroupJid(),
     prompt: body.prompt,
     schedule_type: scheduleType,
     schedule_value: body.schedule_value || '',
@@ -479,6 +480,21 @@ export async function handleApiRoute(
       await handleSessionCreate(req, res);
       return true;
     }
+    // Per-session context — must be checked before the catch-all /api/sessions/:id
+    const sessCtxMatch = p.match(/^\/api\/sessions\/([^/]+)\/context$/);
+    if (sessCtxMatch) {
+      const sessionId = decodeURIComponent(sessCtxMatch[1]);
+      if (method === 'GET') {
+        json(res, getSessionContext(sessionId));
+        return true;
+      }
+      if (method === 'PUT') {
+        const body = JSON.parse(await readBody(req));
+        const updated = saveSessionContext(sessionId, body);
+        json(res, updated);
+        return true;
+      }
+    }
     const sessionMatch = p.match(/^\/api\/sessions\/(.+)$/);
     if (sessionMatch) {
       const sessionId = decodeURIComponent(sessionMatch[1]);
@@ -614,6 +630,68 @@ export async function handleApiRoute(
     const qaMatch = p.match(/^\/api\/quick-actions\/(.+)$/);
     if (qaMatch && method === 'DELETE') {
       handleQuickActionDelete(req, res, decodeURIComponent(qaMatch[1]));
+      return true;
+    }
+
+    // Context files
+    if (p === '/api/context' && method === 'GET') {
+      json(res, listContextFiles());
+      return true;
+    }
+    if (p === '/api/context/preview' && method === 'GET') {
+      const preview = buildAgentContext({ sessionId: 'preview', source: 'web' });
+      json(res, { context: preview });
+      return true;
+    }
+    const ctxMatch = p.match(/^\/api\/context\/(.+)$/);
+    if (ctxMatch) {
+      const filename = decodeURIComponent(ctxMatch[1]);
+      if (method === 'GET') {
+        const content = readContextFile(filename);
+        if (content === null) return (error(res, 'Not found', 404), true);
+        json(res, { filename, content });
+        return true;
+      }
+      if (method === 'PUT') {
+        const body = JSON.parse(await readBody(req));
+        if (!writeContextFile(filename, body.content || '')) return (error(res, 'Invalid filename', 400), true);
+        json(res, { ok: true });
+        return true;
+      }
+      if (method === 'DELETE') {
+        if (!deleteContextFile(filename)) return (error(res, 'Not found', 404), true);
+        json(res, { ok: true });
+        return true;
+      }
+    }
+
+    // System prompt (.system-prompt — persona/identity block)
+    if (p === '/api/system-prompt') {
+      const promptPath = path.join(groupDir(), '.system-prompt');
+      if (method === 'GET') {
+        if (!fs.existsSync(promptPath)) return (json(res, { content: '' }), true);
+        json(res, { content: fs.readFileSync(promptPath, 'utf-8') });
+        return true;
+      }
+      if (method === 'PUT') {
+        const body = JSON.parse(await readBody(req));
+        fs.writeFileSync(promptPath, body.content || '', 'utf-8');
+        json(res, { ok: true });
+        return true;
+      }
+    }
+
+    // Group config
+    if (p === '/api/group-config' && method === 'GET') {
+      json(res, getGroupConfig());
+      return true;
+    }
+    if (p === '/api/group-config' && method === 'PUT') {
+      const body = JSON.parse(await readBody(req));
+      const configPath = path.join(groupDir(), 'group.json');
+      fs.writeFileSync(configPath, JSON.stringify(body, null, 2), 'utf-8');
+      reloadGroupConfig();
+      json(res, { ok: true });
       return true;
     }
 

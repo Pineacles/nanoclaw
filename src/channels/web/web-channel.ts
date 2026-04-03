@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { Channel } from '../../types.js';
 import type { ChannelOpts } from '../registry.js';
 import { createWebServer, WebServer } from './web-server.js';
+import { loadGroupConfig, getGroupFolder, getGroupJid, getAssistantName, getGroupDir } from './group-config.js';
 
 export interface WebChannelOpts extends ChannelOpts {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,9 +31,6 @@ export interface WebChannelOpts extends ChannelOpts {
   whatsappBridgeJid?: string;
   sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
 }
-
-const GROUP_JID = 'web:seyoung';
-const GROUP_FOLDER = 'seyoung';
 
 export function createWebChannel(opts: WebChannelOpts): Channel | null {
   let webServer: WebServer | null = null;
@@ -61,22 +59,26 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
     );
   }
 
-  const pipelineJid = opts.whatsappBridgeJid || GROUP_JID;
-
   return {
     name: 'web',
 
     async connect(): Promise<void> {
+      // Load group config first — all other modules depend on it
+      const config = loadGroupConfig();
+      const groupFolder = config.group_folder;
+      const groupJid = config.group_jid;
+      const pipelineJid = opts.whatsappBridgeJid || groupJid;
+
       // Ensure group folder exists
-      const groupDir = path.join(GROUPS_DIR, GROUP_FOLDER);
+      const groupDir = getGroupDir();
       fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
       fs.mkdirSync(path.join(groupDir, 'uploads'), { recursive: true });
 
       // Register the pipeline JID as the single group for all sessions
       setRegisteredGroup(pipelineJid, {
-        name: 'Seyoung',
-        folder: GROUP_FOLDER,
-        trigger: '@Seyoung',
+        name: config.assistant.name,
+        folder: groupFolder,
+        trigger: config.assistant.trigger,
         added_at: new Date().toISOString(),
         requiresTrigger: false,
         isMain: false,
@@ -86,7 +88,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       storeChatMetadata(
         pipelineJid,
         new Date().toISOString(),
-        'Seyoung',
+        config.assistant.name,
         'web',
         false,
       );
@@ -95,14 +97,14 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       webServer = createWebServer({
         onMessage: opts.onMessage,
         getMessages: (sessionId?: string) =>
-          getChatMessages(pipelineJid, 20, sessionId),
+          getChatMessages(pipelineJid, 5000, sessionId),
         runTaskNow: opts.runTaskNow,
         whatsappBridgeJid: opts.whatsappBridgeJid,
         sendToWhatsApp: opts.sendToWhatsApp,
       });
 
       // Create nightly mood planning task if not exists
-      const existingTasks = getTasksForGroup(GROUP_FOLDER);
+      const existingTasks = getTasksForGroup(groupFolder);
       const hasMoodTask = existingTasks.some(
         (t) =>
           t.prompt.includes('mood schedule') &&
@@ -111,10 +113,10 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       if (!hasMoodTask) {
         const moodTask = {
           id: crypto.randomUUID(),
-          group_folder: GROUP_FOLDER,
-          chat_jid: GROUP_JID,
+          group_folder: groupFolder,
+          chat_jid: groupJid,
           prompt:
-            "It's almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, commission work, lunch, bouldering or other exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.",
+            "It's almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, work/creative time, lunch, exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.\n\nAlso generate a `daily_weights` block in mood.json that reflects your emotional tendencies for tomorrow. This controls the natural drift of your mood throughout the day. Format:\n```json\n\"daily_weights\": {\n  \"base\": {\"chill\": 0.3, \"focused\": 0.25, \"playful\": 0.2, \"soft\": 0.1, \"tired\": 0.15},\n  \"random_factor\": 0.12,\n  \"desired_override\": null\n}\n```\nThe `base` weights should add up to ~1.0 and reflect which moods are most likely tomorrow (only include moods that make sense for the day — skip sleeping/eating/training as those are scheduled). Set `random_factor` between 0.10-0.15 for natural unpredictability. Use `desired_override` (a mood name string) only if you specifically want to lean into a mood tomorrow, otherwise null.",
           schedule_type: 'cron' as const,
           schedule_value: '0 23 * * *',
           context_mode: 'group' as const,
@@ -126,7 +128,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           moodTask as Parameters<typeof computeNextRun>[0],
         );
         createTask(moodTask);
-        logger.info('Created nightly mood planning task for Seyoung');
+        logger.info(`Created nightly mood planning task for ${config.assistant.name}`);
       }
 
       connected = true;
@@ -172,12 +174,10 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       if (!webServer) return;
       const sid = sessionId || 'default';
       if (isTyping) {
-        // Reset accumulator when typing starts (new response)
         const timer = finalizeTimers.get(sid);
         if (timer) clearTimeout(timer);
         accumulators.delete(sid);
       } else {
-        // Typing ended — finalize immediately if not already done
         const timer = finalizeTimers.get(sid);
         if (timer) clearTimeout(timer);
         finalize(sid);

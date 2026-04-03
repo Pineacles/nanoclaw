@@ -22,13 +22,13 @@ export function ToolStatus({ status }: Props) {
   }, [status.tool]);
 
   return (
-    <div className="flex justify-start ml-4 sm:ml-12 mb-2">
-      <div className="bg-tertiary/10 border border-tertiary/20 rounded-full px-4 py-1.5
+    <div className="flex justify-start ml-1 lg:ml-12 mb-1 lg:mb-2">
+      <div className="bg-tertiary/10 border border-tertiary/20 rounded-full px-3 lg:px-4 py-1 lg:py-1.5
         flex items-center gap-2 shadow-sm animate-pulse">
-        <span className="material-symbols-outlined text-tertiary-dim text-[16px]">{display.icon}</span>
-        <span className="text-tertiary-dim text-xs font-medium">{display.label}</span>
+        <span className="material-symbols-outlined text-tertiary-dim text-[14px] lg:text-[16px]">{display.icon}</span>
+        <span className="text-tertiary-dim text-[11px] lg:text-xs font-medium">{display.label}</span>
         {status.target && (
-          <span className="text-on-surface-variant text-xs">{status.target}</span>
+          <span className="hidden lg:inline text-on-surface-variant text-xs">{status.target}</span>
         )}
       </div>
     </div>

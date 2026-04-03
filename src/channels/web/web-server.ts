@@ -45,7 +45,8 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-const GROUP_JID = 'web:seyoung';
+import { getGroupFolder, getGroupJid, getGroupConfig, getTimezone, getAssistantName, getUserName, getUserSenderId, getGroupDir as getGroupDirPath } from './group-config.js';
+import { buildAgentContext, getCurrentMood } from './context-builder.js';
 
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
@@ -138,55 +139,6 @@ async function generateSessionTitle(
 }
 
 const WHATSAPP_SESSION_ID = 'whatsapp';
-const GROUP_FOLDER = 'seyoung';
-
-/**
- * Build a compact memory context string for injection into agent prompts.
- * Reads the latest diary entry and a few recent memories to give the agent
- * a sense of continuity without bloating the context.
- */
-function buildMemoryContext(): string {
-  const parts: string[] = [];
-
-  // Last diary entry — check if one exists from yesterday or today
-  try {
-    const diaryDir = path.join(process.cwd(), 'groups', GROUP_FOLDER, 'diary');
-    if (fs.existsSync(diaryDir)) {
-      const entries = fs
-        .readdirSync(diaryDir)
-        .filter((f) => f.endsWith('.md'))
-        .sort()
-        .reverse();
-      if (entries.length > 0) {
-        const latest = fs
-          .readFileSync(path.join(diaryDir, entries[0]), 'utf-8')
-          .trim();
-        // Take first 300 chars of the diary as a summary
-        const snippet =
-          latest.length > 300 ? latest.slice(0, 300) + '...' : latest;
-        parts.push(`Last diary (${entries[0].replace('.md', '')}): ${snippet}`);
-      }
-    }
-  } catch {
-    // Diary not available, skip
-  }
-
-  // Recent memories — top 5 most important active memories
-  try {
-    const recent = getRecentMemories({ group_folder: GROUP_FOLDER, limit: 5 });
-    if (recent.length > 0) {
-      const memLines = recent
-        .sort((a, b) => b.importance - a.importance)
-        .slice(0, 5)
-        .map((m) => `  - [${m.category}] ${m.content.slice(0, 100)}`);
-      parts.push(`Recent memories:\n${memLines.join('\n')}`);
-    }
-  } catch {
-    // Memory DB not available, skip
-  }
-
-  return parts.length > 0 ? '\n' + parts.join('\n') : '';
-}
 
 function internalJson(
   res: http.ServerResponse,
@@ -342,6 +294,41 @@ async function handleInternalRoute(
     return (internalJson(res, { archived: count }), true);
   }
 
+  // --- Context files (agent can read/write context/*.md) ---
+  if (p === '/internal/context-list' && method === 'GET') {
+    const { listContextFiles: listCtx } = await import('./context-loader.js');
+    return (internalJson(res, listCtx()), true);
+  }
+
+  if (p === '/internal/context-read' && method === 'GET') {
+    const filename = url.searchParams.get('filename');
+    if (!filename) return (internalJson(res, { error: 'filename required' }, 400), true);
+    const { readContextFile: readCtx } = await import('./context-loader.js');
+    const content = readCtx(filename);
+    if (content === null) return (internalJson(res, { error: 'Not found' }, 404), true);
+    return (internalJson(res, { filename, content }), true);
+  }
+
+  if (p === '/internal/context-write' && method === 'POST') {
+    const body = JSON.parse(await readInternalBody(req));
+    if (!body.filename || body.content === undefined) {
+      return (internalJson(res, { error: 'filename and content required' }, 400), true);
+    }
+    const { writeContextFile: writeCtx } = await import('./context-loader.js');
+    if (!writeCtx(body.filename, body.content)) {
+      return (internalJson(res, { error: 'Invalid filename (must end in .md)' }, 400), true);
+    }
+    return (internalJson(res, { ok: true }), true);
+  }
+
+  if (p === '/internal/context-delete' && method === 'POST') {
+    const body = JSON.parse(await readInternalBody(req));
+    if (!body.filename) return (internalJson(res, { error: 'filename required' }, 400), true);
+    const { deleteContextFile: deleteCtx } = await import('./context-loader.js');
+    if (!deleteCtx(body.filename)) return (internalJson(res, { error: 'Not found' }, 404), true);
+    return (internalJson(res, { ok: true }), true);
+  }
+
   return false;
 }
 
@@ -436,8 +423,19 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         res.end('Bad request');
         return;
       }
-      const filePath = path.resolve(process.cwd(), 'groups', 'seyoung', 'uploads', filename);
-      if (!filePath.startsWith(path.resolve(process.cwd(), 'groups', 'seyoung', 'uploads')) || !fs.existsSync(filePath)) {
+      const filePath = path.resolve(
+        process.cwd(),
+        'groups',
+        getGroupFolder(),
+        'uploads',
+        filename,
+      );
+      if (
+        !filePath.startsWith(
+          path.resolve(process.cwd(), 'groups', getGroupFolder(), 'uploads'),
+        ) ||
+        !fs.existsSync(filePath)
+      ) {
         res.writeHead(404);
         res.end('Not found');
         return;
@@ -456,10 +454,13 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         '.wav': 'audio/wav',
         '.zip': 'application/zip',
         '.doc': 'application/msword',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.docx':
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         '.xls': 'application/vnd.ms-excel',
-        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.xlsx':
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.pptx':
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       };
       const contentType = UPLOAD_MIME[ext] || 'application/octet-stream';
       const content = fs.readFileSync(filePath);
@@ -561,7 +562,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
             const uploadsDir = path.resolve(
               process.cwd(),
               'groups',
-              'seyoung',
+              getGroupFolder(),
               'uploads',
             );
             fs.mkdirSync(uploadsDir, { recursive: true });
@@ -582,7 +583,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
             const uploadsDir = path.resolve(
               process.cwd(),
               'groups',
-              'seyoung',
+              getGroupFolder(),
               'uploads',
             );
             fs.mkdirSync(uploadsDir, { recursive: true });
@@ -601,24 +602,12 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           const messageId = crypto.randomUUID();
           const timestamp = new Date().toISOString();
 
-          // Prepend current date/time for the agent (invisible to UI)
-          const zurichTime = new Date().toLocaleString('en-GB', {
-            timeZone: 'Europe/Zurich',
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZoneName: 'short',
-          });
           const sessionId = msg.sessionId || 'default';
 
-          // Resolve mood and memory for context injection
-          const mood = resolveMood();
-          const moodLine = `Current mood: ${mood.current_mood} (energy ${mood.energy}/10)${mood.activity ? ` — currently: ${mood.activity}` : ''}`;
-          const memoryContext = buildMemoryContext();
-          const agentContent = `[System: Current time is ${zurichTime}. ${moodLine}. Chat session: ${sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions.${memoryContext}]\n${content}`;
+          // Build context from group config, mood, memory, and context/*.md files
+          const mood = getCurrentMood();
+          const agentContext = buildAgentContext({ sessionId, source: 'web' });
+          const agentContent = `${agentContext}\n${content}`;
 
           // Touch session updated_at
           touchWebSession(sessionId);
@@ -626,20 +615,30 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           // When WhatsApp bridge is active, route through the bridge JID
           // so messages land in the registered group (WhatsApp owns the
           // seyoung folder registration in bridge mode).
-          const pipelineJid = opts.whatsappBridgeJid || GROUP_JID;
+          const pipelineJid = opts.whatsappBridgeJid || getGroupJid();
 
           // Store under the pipeline JID so messages are found by the message loop
           storeMessage({
             id: messageId,
             chat_jid: pipelineJid,
-            sender: 'web:michael',
-            sender_name: 'Michael',
+            sender: getUserSenderId(),
+            sender_name: getUserName(),
             content: agentContent,
             timestamp,
             is_from_me: false,
             is_bot_message: false,
             session_id: sessionId,
             mood: mood.current_mood,
+          });
+
+          // Broadcast user message to all clients so other tabs/windows see it
+          broadcast({
+            type: 'new_user_message',
+            id: messageId,
+            sender_name: getUserName(),
+            content,
+            timestamp,
+            sessionId,
           });
 
           // Check if another session is busy — if so, mark this one as queued
@@ -664,8 +663,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           opts.onMessage(pipelineJid, {
             id: messageId,
             chat_jid: pipelineJid,
-            sender: 'web:michael',
-            sender_name: 'Michael',
+            sender: getUserSenderId(),
+            sender_name: getUserName(),
             content: agentContent,
             timestamp,
             mood: mood.current_mood,
@@ -700,7 +699,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
     logger.info({ port }, 'Web UI server listening');
   });
 
-  const pipelineJid = opts.whatsappBridgeJid || GROUP_JID;
+  const pipelineJid = opts.whatsappBridgeJid || getGroupJid();
 
   return {
     server,
@@ -755,7 +754,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           id: messageId,
           chat_jid: pipelineJid,
           sender: 'bot',
-          sender_name: 'Seyoung',
+          sender_name: getAssistantName(),
           content: cleanText,
           timestamp: new Date().toISOString(),
           is_from_me: true,
@@ -841,7 +840,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         const uploadsDir = path.resolve(
           process.cwd(),
           'groups',
-          'seyoung',
+          getGroupFolder(),
           'uploads',
         );
         fs.mkdirSync(uploadsDir, { recursive: true });
@@ -852,21 +851,10 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         }
       }
 
-      // Prepend system context (same as web UI messages)
-      const zurichTime = new Date().toLocaleString('en-GB', {
-        timeZone: 'Europe/Zurich',
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZoneName: 'short',
-      });
-      const mood = resolveMood();
-      const moodLine = `Current mood: ${mood.current_mood} (energy ${mood.energy}/10)${mood.activity ? ` — currently: ${mood.activity}` : ''}`;
-      const memoryContext = buildMemoryContext();
-      const agentContent = `[System: Current time is ${zurichTime}. ${moodLine}. Source: WhatsApp.${memoryContext}]\n${fullContent}`;
+      // Build context from group config, mood, memory, and context/*.md files
+      const mood = getCurrentMood();
+      const agentContext = buildAgentContext({ sessionId, source: 'whatsapp' });
+      const agentContent = `${agentContext}\n${fullContent}`;
 
       touchWebSession(sessionId);
 

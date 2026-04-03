@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 interface Attachment {
@@ -48,16 +48,15 @@ function readFileAsDataUri(file: File): Promise<string> {
   });
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** Detect touch-primary device (phone/tablet) */
+function isMobile(): boolean {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 }
 
 export function InputBar({ onSend, disabled }: Props) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const textareaRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSend = useCallback(() => {
@@ -74,20 +73,35 @@ export function InputBar({ onSend, disabled }: Props) {
     );
     setText('');
     setAttachments([]);
-    if (textareaRef.current) {
-      textareaRef.current.value = '';
-    }
   }, [text, attachments, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Desktop: Enter sends, Shift+Enter newline
+      // Mobile: Enter always inserts newline, send via button only
+      if (e.key === 'Enter') {
+        if (isMobile()) {
+          // Let Enter create newline on mobile — do nothing
+          return;
+        }
+        if (e.shiftKey) {
+          // Shift+Enter inserts newline on desktop — do nothing
+          return;
+        }
         e.preventDefault();
         handleSend();
       }
     },
     [handleSend],
   );
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [text]);
 
   const addFiles = useCallback(async (files: FileList | File[]) => {
     const processed: Attachment[] = [];
@@ -136,7 +150,7 @@ export function InputBar({ onSend, disabled }: Props) {
 
   return (
     <div
-      className="px-3 sm:px-8 md:px-12 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-6 pt-2 sm:pt-3"
+      className="px-2.5 lg:px-12 pb-1.5 lg:pb-6 pt-1.5 lg:pt-3"
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
     >
@@ -170,13 +184,13 @@ export function InputBar({ onSend, disabled }: Props) {
           </div>
         )}
 
-        {/* Input row — all three elements (input box, send button) share the same 48px height */}
-        <div className="flex gap-2 sm:gap-3">
-          <div className="flex-1 h-11 sm:h-12 flex items-center bg-surface-container-high border border-outline-variant/20 rounded-2xl
-            focus-within:border-primary/40 transition-colors overflow-hidden">
+        {/* Input row */}
+        <div className="flex gap-2 sm:gap-3 items-end">
+          <div className="flex-1 flex items-end bg-surface-container-high border border-outline-variant/20 rounded-2xl
+            focus-within:border-primary/40 transition-colors overflow-hidden min-h-[44px] sm:min-h-[48px]">
             {/* Attach */}
             <button
-              className="h-11 sm:h-12 w-10 sm:w-12 flex items-center justify-center text-on-surface-variant/50 hover:text-on-surface-variant transition-colors shrink-0"
+              className="h-11 sm:h-12 w-10 sm:w-12 flex items-center justify-center text-on-surface-variant/50 hover:text-on-surface-variant transition-colors shrink-0 self-end"
               onClick={() => fileInputRef.current?.click()}
               title="Attach file"
             >
@@ -193,18 +207,18 @@ export function InputBar({ onSend, disabled }: Props) {
               }}
             />
 
-            {/* Text input — single line input, not textarea */}
-            <input
+            {/* Textarea — auto-resizes, supports multiline */}
+            <textarea
               ref={textareaRef}
-              type="text"
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder="Send a message..."
               disabled={disabled}
-              className="flex-1 h-11 sm:h-12 bg-transparent text-on-surface text-sm
-                placeholder:text-on-surface-variant/40 focus:outline-none border-none disabled:opacity-50 pr-3"
+              rows={1}
+              className="flex-1 py-2.5 sm:py-3 bg-transparent text-on-surface text-sm
+                placeholder:text-on-surface-variant/40 focus:outline-none border-none disabled:opacity-50 pr-3 resize-none leading-relaxed"
             />
           </div>
 

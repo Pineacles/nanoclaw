@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getToken } from './lib/api';
+import { getToken, setToken } from './lib/api';
 import { useChat } from './hooks/useChat';
 import { useMemory } from './hooks/useMemory';
 import { useTasks } from './hooks/useTasks';
@@ -11,13 +11,18 @@ import { MemoryPage } from './components/MemoryPage';
 import { TasksPage } from './components/TasksPage';
 import { QuickActionsPage } from './components/QuickActionsPage';
 import { SettingsPage } from './components/SettingsPage';
+import { ContextPage } from './components/ContextPage';
 import { SessionsPanel } from './components/SessionsPanel';
 import { FilesPanel, countAttachments } from './components/FilesPanel';
+import { BottomNav } from './components/BottomNav';
+import { MoreSheet } from './components/MoreSheet';
+import { MOOD_COLORS } from './components/MoodBlob';
 
 export default function App() {
   const [authVersion, setAuthVersion] = useState(0);
   const [activeView, setActiveView] = useState<View>('sessions');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
+  const [showFilesPanel, setShowFilesPanel] = useState(false);
   const authenticated = !!getToken();
 
   const handleAuthChange = useCallback(() => {
@@ -47,19 +52,19 @@ export default function App() {
   const memory = useMemory(authenticated);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
-  const [showFilesPanel, setShowFilesPanel] = useState(false);
   const attachmentCount = useMemo(() => countAttachments(messages), [messages]);
 
-  // Close sidebar on navigation (mobile)
+  const moodColor = MOOD_COLORS[mood.current_mood || 'chill'] || MOOD_COLORS.chill;
+
+  // Close more sheet on nav
   const handleViewChange = useCallback((view: View) => {
     setActiveView(view);
-    setSidebarOpen(false);
+    setMoreSheetOpen(false);
   }, []);
 
-  // Close sidebar when selecting a session (mobile)
   const handleSessionSelect = useCallback((id: string) => {
     setActiveSessionId(id);
-    setSidebarOpen(false);
+    setMoreSheetOpen(false);
   }, [setActiveSessionId]);
 
   // Close files panel on session switch
@@ -73,14 +78,28 @@ export default function App() {
     if (!authenticated) {
       return (
         <div className="flex items-center justify-center h-full px-4">
-          <div className="text-center p-8 sm:p-10 bg-surface-container rounded-[1rem] border-l-4 border-primary inner-thought-glow max-w-sm w-full">
+          <div className="p-8 sm:p-10 bg-surface-container rounded-[1rem] border-l-4 border-primary inner-thought-glow max-w-sm w-full">
             <div className="flex items-center justify-center w-14 h-14 rounded-full bg-primary/20 mx-auto mb-4">
               <span className="material-symbols-outlined text-primary text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>lock</span>
             </div>
-            <h1 className="text-xl font-bold mb-2">Welcome</h1>
-            <p className="text-on-surface-variant text-sm leading-relaxed">
-              Enter your authentication token in the Settings panel to begin your intimate digital experience.
+            <h1 className="text-xl font-bold mb-2 text-center">Welcome</h1>
+            <p className="text-on-surface-variant text-sm leading-relaxed text-center mb-6">
+              Enter your authentication token to begin.
             </p>
+            <form onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements.namedItem('token') as HTMLInputElement; if (input.value.trim()) { setToken(input.value.trim()); handleAuthChange(); } }}>
+              <input
+                name="token"
+                type="password"
+                placeholder="Auth token..."
+                className="w-full bg-surface-container-highest border-none rounded-xl py-3 px-4 text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-dim transition-all text-sm focus:outline-none mb-3"
+              />
+              <button
+                type="submit"
+                className="w-full signature-glow text-on-primary-fixed font-bold py-3 px-8 rounded-xl shadow-lg active:scale-[0.98] transition-all text-sm"
+              >
+                Connect
+              </button>
+            </form>
           </div>
         </div>
       );
@@ -137,6 +156,8 @@ export default function App() {
             authenticated={authenticated}
           />
         );
+      case 'context':
+        return <ContextPage authenticated={authenticated} />;
       case 'settings':
         return (
           <SettingsPage
@@ -149,21 +170,11 @@ export default function App() {
 
   return (
     <div className="h-dvh flex bg-surface">
-      {/* Mobile backdrop */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar Navigation */}
+      {/* Desktop Sidebar — hidden on mobile */}
       <Sidebar
         activeView={activeView}
         onViewChange={handleViewChange}
         mood={mood}
-        mobileOpen={sidebarOpen}
-        onMobileClose={() => setSidebarOpen(false)}
         sessionList={
           <SessionsPanel
             sessions={sessions}
@@ -176,27 +187,40 @@ export default function App() {
         }
       />
 
-      {/* Main Content Canvas */}
+      {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 lg:ml-72">
-        {/* TopAppBar */}
-        <header className="flex justify-between items-center px-4 sm:px-8 py-3 sm:py-4 w-full sticky top-0 z-20 bg-surface/80 backdrop-blur-lg">
-          <div className="flex items-center gap-3 sm:gap-4">
-            {/* Mobile hamburger */}
+        {/* TopAppBar — mobile: minimal with mood dot. Desktop: full */}
+        <header className="flex justify-between items-center px-4 sm:px-8 py-2.5 sm:py-4 w-full sticky top-0 z-20 bg-surface/80 backdrop-blur-lg">
+          <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
+            {/* Mobile: mood dot (tapping opens more sheet) */}
             <button
-              className="lg:hidden w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors -ml-1"
-              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden w-8 h-8 flex items-center justify-center rounded-full transition-colors active:scale-90"
+              onClick={() => setMoreSheetOpen(true)}
+              title="Menu"
             >
-              <span className="material-symbols-outlined text-on-surface-variant">menu</span>
+              <div
+                className="w-3 h-3 rounded-full transition-colors duration-700 shadow-[0_0_8px_var(--mood-glow)]"
+                style={{
+                  background: moodColor,
+                  '--mood-glow': moodColor + '60',
+                } as React.CSSProperties}
+              />
             </button>
-            <h1 className="text-base sm:text-lg font-bold text-primary tracking-tight">Assistant</h1>
-            <span className="hidden sm:inline px-2 py-0.5 rounded-md bg-surface-container-highest text-[10px] text-on-surface-variant border border-outline-variant/10 uppercase tracking-tighter">
+            {/* Desktop: brand */}
+            <h1 className="hidden lg:block text-lg font-bold text-primary tracking-tight">Assistant</h1>
+            <span className="hidden lg:inline px-2 py-0.5 rounded-md bg-surface-container-highest text-[10px] text-on-surface-variant border border-outline-variant/10 uppercase tracking-tighter">
               Claude Sonnet 4
+            </span>
+            {/* Mobile: session name */}
+            <span className="lg:hidden text-sm font-semibold text-on-surface truncate max-w-[200px]">
+              {activeView === 'sessions' ? (activeSession?.name || 'Chat') : activeView.charAt(0).toUpperCase() + activeView.slice(1)}
             </span>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
             {activeView === 'sessions' && (
               <>
-                <span className="text-xs sm:text-sm text-on-surface-variant font-medium truncate max-w-[120px] sm:max-w-none">
+                {/* Desktop: session name */}
+                <span className="hidden lg:block text-sm text-on-surface-variant font-medium">
                   {activeSession?.name || 'Chat'}
                 </span>
                 <button
@@ -219,11 +243,35 @@ export default function App() {
           </div>
         </header>
 
-        {/* Content */}
-        <div className="flex-1 min-h-0">
+        {/* Content — on mobile, reserve space for bottom nav */}
+        <div className="flex-1 min-h-0 pb-14 lg:pb-0">
           {renderMainContent()}
         </div>
       </main>
+
+      {/* Mobile Bottom Nav */}
+      <BottomNav
+        activeView={activeView}
+        onViewChange={handleViewChange}
+        onMoreTap={() => setMoreSheetOpen((v) => !v)}
+        moreOpen={moreSheetOpen}
+      />
+
+      {/* More Sheet (mobile) */}
+      <MoreSheet
+        open={moreSheetOpen}
+        onClose={() => setMoreSheetOpen(false)}
+        mood={mood}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={handleSessionSelect}
+        onCreateSession={createSession}
+        onRenameSession={renameSession}
+        onDeleteSession={deleteSession}
+        onNavigate={handleViewChange}
+        attachmentCount={attachmentCount}
+        onOpenFiles={() => { setShowFilesPanel(true); setMoreSheetOpen(false); }}
+      />
 
       {/* Files drawer */}
       {showFilesPanel && activeView === 'sessions' && (

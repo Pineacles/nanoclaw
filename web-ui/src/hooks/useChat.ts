@@ -81,11 +81,11 @@ export function useChat(
 
   const onWsMessage = useCallback(
     (msg: { type: string; id?: string; content?: string; done?: boolean; isTyping?: boolean; message?: string; tool?: string; target?: string; current_mood?: string; energy?: number; activity?: string; sessionId?: string; name?: string; sender_name?: string; timestamp?: string }) => {
-      // WhatsApp bridged message — add as a user message to the chat
+      // User message broadcast — from any client (including self)
+      // Deduplicates so the sender doesn't see doubles
       if (msg.type === 'new_user_message' && msg.id && msg.content) {
         if (msg.sessionId && msg.sessionId !== activeSessionIdRef.current) return;
         setMessages((prev) => {
-          // Deduplicate
           if (prev.some((m) => m.id === msg.id)) return prev;
           return [
             ...prev,
@@ -142,12 +142,11 @@ export function useChat(
         });
       }
 
+      // Typing and tool_use — show for the active session
       if (msg.type === 'typing') {
-        // Ignore typing for other sessions
         if (msg.sessionId && msg.sessionId !== activeSessionIdRef.current) return;
         const typing = msg.isTyping ?? false;
         setIsTyping(typing);
-        // Typing started means no longer queued
         if (typing) setIsQueued(false);
         if (!typing) {
           setToolStatus(null);
@@ -238,16 +237,8 @@ export function useChat(
 
   const sendMessage = useCallback(
     (content: string, images?: string[], files?: { name: string; data: string }[]) => {
-      const id = crypto.randomUUID();
-      const timestamp = new Date().toISOString();
-
-      // Add user message to local state
-      setMessages((prev) => [
-        ...prev,
-        { id, content, sender: 'user', timestamp },
-      ]);
-
-      // Send via WebSocket with sessionId
+      // Send via WebSocket — the server will broadcast back as new_user_message
+      // which the onWsMessage handler will add to the local state (with dedup)
       send({ type: 'chat', content, images, files, sessionId: activeSessionId });
     },
     [send, activeSessionId],

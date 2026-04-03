@@ -2,7 +2,13 @@
 
 // Client → Server
 export type ClientMessage =
-  | { type: 'chat'; content: string; images?: string[]; files?: { name: string; data: string }[]; sessionId?: string }
+  | {
+      type: 'chat';
+      content: string;
+      images?: string[];
+      files?: { name: string; data: string }[];
+      sessionId?: string;
+    }
   | { type: 'get_session_state'; sessionId: string }
   | { type: 'ping' };
 

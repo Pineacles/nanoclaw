@@ -144,10 +144,7 @@ export interface MemorySearchResult extends Memory {
 
 // --- Conflict Detection ---
 
-function findConflicts(
-  db: Database.Database,
-  opts: MemorySaveOpts,
-): Memory[] {
+function findConflicts(db: Database.Database, opts: MemorySaveOpts): Memory[] {
   // Build FTS query from significant words in the content
   const ftsQuery = opts.content
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
@@ -308,7 +305,8 @@ export function searchMemories(opts: MemorySearchOpts): MemorySearchResult[] {
   const scored: MemorySearchResult[] = rows.map((row) => {
     const daysSinceAccess =
       (Date.now() - new Date(row.last_accessed).getTime()) / 86400000;
-    const confidence = (row as unknown as { confidence: number }).confidence ?? 0.7;
+    const confidence =
+      (row as unknown as { confidence: number }).confidence ?? 0.7;
     const score =
       row.importance * 2 * confidence +
       Math.log(row.access_count + 1) * 3 -

@@ -1,4 +1,4 @@
-const TOKEN_KEY = 'seyoung_auth_token';
+const TOKEN_KEY = 'nanoclaw_auth_token';
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || '';

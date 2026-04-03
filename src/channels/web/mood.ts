@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
-
-const GROUP_FOLDER = 'seyoung';
+import { getGroupFolder, getTimezone } from './group-config.js';
 const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 export interface MoodScheduleSlot {
@@ -12,11 +11,18 @@ export interface MoodScheduleSlot {
   activity: string;
 }
 
+export interface DailyWeights {
+  base: Record<string, number>;
+  random_factor: number;
+  desired_override: string | null;
+}
+
 export interface MoodData {
   current_mood: string;
   energy: number;
   updated_at: string;
   schedule: MoodScheduleSlot[];
+  daily_weights?: DailyWeights;
 }
 
 export interface ResolvedMood {
@@ -28,7 +34,7 @@ export interface ResolvedMood {
 }
 
 function moodPath(): string {
-  return path.join(GROUPS_DIR, GROUP_FOLDER, 'mood.json');
+  return path.join(GROUPS_DIR, getGroupFolder(), 'mood.json');
 }
 
 function readMoodFile(): MoodData {
@@ -49,7 +55,7 @@ function writeMoodFile(data: MoodData): void {
 
 function getZurichTimeStr(): string {
   return new Date().toLocaleTimeString('en-GB', {
-    timeZone: 'Europe/Zurich',
+    timeZone: getTimezone(),
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,

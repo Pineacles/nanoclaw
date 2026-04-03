@@ -21,6 +21,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { getSessionContext } from './channels/web/context-builder.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -411,6 +412,10 @@ async function runAgent(
     : undefined;
 
   try {
+    // Check if identity is disabled for this chat session
+    const chatSessionId = sessionId || 'default';
+    const sessionCtx = getSessionContext(chatSessionId);
+
     const output = await runContainerAgent(
       group,
       {
@@ -420,6 +425,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        skipIdentity: sessionCtx.claude_md_disabled,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
