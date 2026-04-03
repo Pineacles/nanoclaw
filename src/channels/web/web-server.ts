@@ -45,7 +45,16 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-import { getGroupFolder, getGroupJid, getGroupConfig, getTimezone, getAssistantName, getUserName, getUserSenderId, getGroupDir as getGroupDirPath } from './group-config.js';
+import {
+  getGroupFolder,
+  getGroupJid,
+  getGroupConfig,
+  getTimezone,
+  getAssistantName,
+  getUserName,
+  getUserSenderId,
+  getGroupDir as getGroupDirPath,
+} from './group-config.js';
 import { buildAgentContext, getCurrentMood } from './context-builder.js';
 
 export interface WebServerOpts {
@@ -302,30 +311,41 @@ async function handleInternalRoute(
 
   if (p === '/internal/context-read' && method === 'GET') {
     const filename = url.searchParams.get('filename');
-    if (!filename) return (internalJson(res, { error: 'filename required' }, 400), true);
+    if (!filename)
+      return (internalJson(res, { error: 'filename required' }, 400), true);
     const { readContextFile: readCtx } = await import('./context-loader.js');
     const content = readCtx(filename);
-    if (content === null) return (internalJson(res, { error: 'Not found' }, 404), true);
+    if (content === null)
+      return (internalJson(res, { error: 'Not found' }, 404), true);
     return (internalJson(res, { filename, content }), true);
   }
 
   if (p === '/internal/context-write' && method === 'POST') {
     const body = JSON.parse(await readInternalBody(req));
     if (!body.filename || body.content === undefined) {
-      return (internalJson(res, { error: 'filename and content required' }, 400), true);
+      return (
+        internalJson(res, { error: 'filename and content required' }, 400),
+        true
+      );
     }
     const { writeContextFile: writeCtx } = await import('./context-loader.js');
     if (!writeCtx(body.filename, body.content)) {
-      return (internalJson(res, { error: 'Invalid filename (must end in .md)' }, 400), true);
+      return (
+        internalJson(res, { error: 'Invalid filename (must end in .md)' }, 400),
+        true
+      );
     }
     return (internalJson(res, { ok: true }), true);
   }
 
   if (p === '/internal/context-delete' && method === 'POST') {
     const body = JSON.parse(await readInternalBody(req));
-    if (!body.filename) return (internalJson(res, { error: 'filename required' }, 400), true);
-    const { deleteContextFile: deleteCtx } = await import('./context-loader.js');
-    if (!deleteCtx(body.filename)) return (internalJson(res, { error: 'Not found' }, 404), true);
+    if (!body.filename)
+      return (internalJson(res, { error: 'filename required' }, 400), true);
+    const { deleteContextFile: deleteCtx } =
+      await import('./context-loader.js');
+    if (!deleteCtx(body.filename))
+      return (internalJson(res, { error: 'Not found' }, 404), true);
     return (internalJson(res, { ok: true }), true);
   }
 
@@ -604,18 +624,24 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
           const sessionId = msg.sessionId || 'default';
 
+          // Check session mode to determine pipeline
+          const webSession = getWebSessionById(sessionId);
+          const isPlainSession = webSession?.mode === 'plain';
+
           // Build context from group config, mood, memory, and context/*.md files
           const mood = getCurrentMood();
           const agentContext = buildAgentContext({ sessionId, source: 'web' });
-          const agentContent = `${agentContext}\n${content}`;
+          const agentContent = isPlainSession
+            ? `[System: Current time is ${new Date().toLocaleString('en-GB', { timeZone: getTimezone(), weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}. Chat session: ${sessionId}.]\n${content}`
+            : `${agentContext}\n${content}`;
 
           // Touch session updated_at
           touchWebSession(sessionId);
 
-          // When WhatsApp bridge is active, route through the bridge JID
-          // so messages land in the registered group (WhatsApp owns the
-          // seyoung folder registration in bridge mode).
-          const pipelineJid = opts.whatsappBridgeJid || getGroupJid();
+          // Plain sessions get their own pipeline JID so they run in a separate container
+          // without persona/identity loaded
+          const basePipelineJid = opts.whatsappBridgeJid || getGroupJid();
+          const pipelineJid = isPlainSession ? `${basePipelineJid}:plain` : basePipelineJid;
 
           // Store under the pipeline JID so messages are found by the message loop
           storeMessage({

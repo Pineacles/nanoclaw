@@ -15,7 +15,13 @@ import crypto from 'crypto';
 import { Channel } from '../../types.js';
 import type { ChannelOpts } from '../registry.js';
 import { createWebServer, WebServer } from './web-server.js';
-import { loadGroupConfig, getGroupFolder, getGroupJid, getAssistantName, getGroupDir } from './group-config.js';
+import {
+  loadGroupConfig,
+  getGroupFolder,
+  getGroupJid,
+  getAssistantName,
+  getGroupDir,
+} from './group-config.js';
 
 export interface WebChannelOpts extends ChannelOpts {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -84,6 +90,19 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
         isMain: false,
       });
 
+      // Register a plain (no-persona) pipeline for plain-mode sessions
+      // Uses a virtual folder name to avoid UNIQUE constraint on folder column,
+      // but the actual directory is the same group folder (resolved in container-runner)
+      const plainJid = `${pipelineJid}:plain`;
+      setRegisteredGroup(plainJid, {
+        name: 'Claude',
+        folder: `${groupFolder}-plain`,
+        trigger: config.assistant.trigger,
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+        isMain: false,
+      });
+
       // Store chat metadata
       storeChatMetadata(
         pipelineJid,
@@ -92,12 +111,25 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
         'web',
         false,
       );
+      storeChatMetadata(
+        plainJid,
+        new Date().toISOString(),
+        'Claude',
+        'web',
+        false,
+      );
 
       // Start web server
       webServer = createWebServer({
         onMessage: opts.onMessage,
-        getMessages: (sessionId?: string) =>
-          getChatMessages(pipelineJid, 5000, sessionId),
+        getMessages: (sessionId?: string) => {
+          // Try persona pipeline first, fall back to plain pipeline
+          const msgs = getChatMessages(pipelineJid, 5000, sessionId);
+          if (msgs.length === 0 && sessionId) {
+            return getChatMessages(plainJid, 5000, sessionId);
+          }
+          return msgs;
+        },
         runTaskNow: opts.runTaskNow,
         whatsappBridgeJid: opts.whatsappBridgeJid,
         sendToWhatsApp: opts.sendToWhatsApp,
@@ -116,7 +148,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           group_folder: groupFolder,
           chat_jid: groupJid,
           prompt:
-            "It's almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, work/creative time, lunch, exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.\n\nAlso generate a `daily_weights` block in mood.json that reflects your emotional tendencies for tomorrow. This controls the natural drift of your mood throughout the day. Format:\n```json\n\"daily_weights\": {\n  \"base\": {\"chill\": 0.3, \"focused\": 0.25, \"playful\": 0.2, \"soft\": 0.1, \"tired\": 0.15},\n  \"random_factor\": 0.12,\n  \"desired_override\": null\n}\n```\nThe `base` weights should add up to ~1.0 and reflect which moods are most likely tomorrow (only include moods that make sense for the day — skip sleeping/eating/training as those are scheduled). Set `random_factor` between 0.10-0.15 for natural unpredictability. Use `desired_override` (a mood name string) only if you specifically want to lean into a mood tomorrow, otherwise null.",
+            'It\'s almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, work/creative time, lunch, exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.\n\nAlso generate a `daily_weights` block in mood.json that reflects your emotional tendencies for tomorrow. This controls the natural drift of your mood throughout the day. Format:\n```json\n"daily_weights": {\n  "base": {"chill": 0.3, "focused": 0.25, "playful": 0.2, "soft": 0.1, "tired": 0.15},\n  "random_factor": 0.12,\n  "desired_override": null\n}\n```\nThe `base` weights should add up to ~1.0 and reflect which moods are most likely tomorrow (only include moods that make sense for the day — skip sleeping/eating/training as those are scheduled). Set `random_factor` between 0.10-0.15 for natural unpredictability. Use `desired_override` (a mood name string) only if you specifically want to lean into a mood tomorrow, otherwise null.',
           schedule_type: 'cron' as const,
           schedule_value: '0 23 * * *',
           context_mode: 'group' as const,
@@ -128,7 +160,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           moodTask as Parameters<typeof computeNextRun>[0],
         );
         createTask(moodTask);
-        logger.info(`Created nightly mood planning task for ${config.assistant.name}`);
+        logger.info(
+          `Created nightly mood planning task for ${config.assistant.name}`,
+        );
       }
 
       connected = true;
@@ -153,7 +187,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
     },
 
     ownsJid(jid: string): boolean {
-      return jid.startsWith('web:');
+      return jid.startsWith('web:') || jid.endsWith(':plain');
     },
 
     async disconnect(): Promise<void> {

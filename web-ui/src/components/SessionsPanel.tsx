@@ -5,7 +5,7 @@ interface Props {
   sessions: WebSession[];
   activeSessionId: string;
   onSelect: (id: string) => void;
-  onCreate: (name?: string) => void;
+  onCreate: (name?: string, mode?: 'persona' | 'plain') => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
 }
@@ -21,6 +21,7 @@ export function SessionsPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showNewMenu, setShowNewMenu] = useState(false);
 
   const startRename = (session: WebSession) => {
     setEditingId(session.id);
@@ -37,21 +38,52 @@ export function SessionsPanel({
   return (
     <div className="flex flex-col h-full">
       {/* New Chat button */}
-      <div className="p-3">
+      <div className="p-3 relative">
         <button
-          onClick={() => onCreate()}
+          onClick={() => setShowNewMenu(!showNewMenu)}
           className="w-full h-[38px] signature-glow text-on-primary-fixed rounded-full text-[13px] font-bold
             flex items-center justify-center gap-2 shadow-[0_4px_20px_rgba(255,144,109,0.3)] hover:shadow-[0_4px_30px_rgba(255,144,109,0.5)] active:scale-[0.98] transition-all"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
           <span>New Session</span>
         </button>
+
+        {showNewMenu && (
+          <div className="absolute left-3 right-3 top-[52px] z-10 bg-surface-container-high rounded-xl border border-outline-variant/20 shadow-xl overflow-hidden">
+            <button
+              onClick={() => { onCreate(undefined, 'persona'); setShowNewMenu(false); }}
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-bright transition-colors text-left"
+            >
+              <div className="w-8 h-8 rounded-full bg-primary/15 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-primary text-[16px]" style={{ fontVariationSettings: "'FILL' 1" }}>face</span>
+              </div>
+              <div>
+                <div className="text-[13px] font-medium text-on-surface">Persona</div>
+                <div className="text-[11px] text-on-surface-variant/60">Full identity + mood + memory</div>
+              </div>
+            </button>
+            <div className="h-px bg-outline-variant/10 mx-3" />
+            <button
+              onClick={() => { onCreate(undefined, 'plain'); setShowNewMenu(false); }}
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-bright transition-colors text-left"
+            >
+              <div className="w-8 h-8 rounded-full bg-surface-container-highest flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">smart_toy</span>
+              </div>
+              <div>
+                <div className="text-[13px] font-medium text-on-surface">Plain</div>
+                <div className="text-[11px] text-on-surface-variant/60">Clean Claude, no persona</div>
+              </div>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto px-3 space-y-1">
+      <div className="flex-1 overflow-y-auto px-3 space-y-1" onClick={() => setShowNewMenu(false)}>
         {sessions.map((session) => {
           const isWhatsApp = session.id === 'whatsapp';
+          const isPlain = session.mode === 'plain';
           return (
           <div
             key={session.id}
@@ -118,12 +150,12 @@ export function SessionsPanel({
             ) : (
               <>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                  isWhatsApp ? 'bg-emerald-500/20' : 'bg-surface-container-highest'
+                  isWhatsApp ? 'bg-emerald-500/20' : isPlain ? 'bg-surface-container-highest' : 'bg-primary/15'
                 }`}>
                   <span className={`material-symbols-outlined text-[16px] ${
-                    isWhatsApp ? 'text-emerald-400' : 'text-on-surface-variant'
-                  }`}>
-                    {isWhatsApp ? 'smartphone' : 'chat_bubble'}
+                    isWhatsApp ? 'text-emerald-400' : isPlain ? 'text-on-surface-variant' : 'text-primary'
+                  }`} style={!isWhatsApp && !isPlain ? { fontVariationSettings: "'FILL' 1" } : undefined}>
+                    {isWhatsApp ? 'smartphone' : isPlain ? 'smart_toy' : 'face'}
                   </span>
                 </div>
                 <div className="flex-1 min-w-0">
@@ -133,7 +165,7 @@ export function SessionsPanel({
                     {session.name}
                   </div>
                   <div className="text-[10px] text-on-surface-variant/60">
-                    {isWhatsApp ? 'Bridged from WhatsApp' : new Date(session.updated_at).toLocaleDateString()}
+                    {isWhatsApp ? 'Bridged from WhatsApp' : isPlain ? 'Plain Claude' : new Date(session.updated_at).toLocaleDateString()}
                   </div>
                 </div>
                 {!isWhatsApp && (

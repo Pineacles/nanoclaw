@@ -17,7 +17,6 @@ interface WebSession {
 
 interface SessionContextData {
   context: string;
-  claude_md_disabled: boolean;
 }
 
 /* ── Identity tab (CLAUDE.md system prompt editor) ── */
@@ -334,12 +333,13 @@ function GeneralTab({ authenticated }: { authenticated: boolean }) {
 
 /* ── Session context tab (per-session context + CLAUDE.md toggle) ── */
 
-function SessionContextTab({ sessionId, sessionName, authenticated }: {
+function SessionContextTab({ sessionId, sessionName, sessionMode, authenticated }: {
   sessionId: string;
   sessionName: string;
+  sessionMode: 'persona' | 'plain';
   authenticated: boolean;
 }) {
-  const [ctx, setCtx] = useState<SessionContextData>({ context: '', claude_md_disabled: false });
+  const [ctx, setCtx] = useState<SessionContextData>({ context: '' });
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -365,48 +365,34 @@ function SessionContextTab({ sessionId, sessionName, authenticated }: {
     setEditing(false);
   }, [sessionId, editContent]);
 
-  const toggleClaudeMd = useCallback(async () => {
-    const updated = await api.put<SessionContextData>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/context`,
-      { claude_md_disabled: !ctx.claude_md_disabled },
-    );
-    setCtx(updated);
-  }, [sessionId, ctx.claude_md_disabled]);
-
   const html = useMemo(() => ctx.context ? renderMarkdown(ctx.context) : '', [ctx.context]);
 
   return (
     <div className="grid grid-cols-12 gap-4 sm:gap-8">
-      {/* Settings panel */}
+      {/* Info panel */}
       <div className="col-span-12 md:col-span-4 flex flex-col gap-4">
         <div className="bg-surface-container rounded-[1rem] p-4 sm:p-6">
           <div className="flex items-center gap-3 mb-4">
-            <span className="material-symbols-outlined text-primary text-[22px]">chat_bubble</span>
+            <span className={`material-symbols-outlined text-[22px] ${sessionMode === 'plain' ? 'text-on-surface-variant' : 'text-primary'}`}
+              style={sessionMode !== 'plain' ? { fontVariationSettings: "'FILL' 1" } : undefined}>
+              {sessionMode === 'plain' ? 'smart_toy' : 'face'}
+            </span>
             <h2 className="text-base sm:text-lg font-bold truncate">{sessionName}</h2>
           </div>
-          <p className="text-on-surface-variant text-sm leading-relaxed mb-5">
+          <p className="text-on-surface-variant text-sm leading-relaxed mb-4">
             Context specific to this session. Injected only when chatting in this session, alongside the general context.
           </p>
 
-          {/* CLAUDE.md toggle */}
-          <div className="bg-surface-container-highest/50 rounded-xl p-4 border border-outline-variant/10">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-on-surface">Identity (CLAUDE.md)</p>
-                <p className="text-[11px] text-on-surface-variant/60 mt-0.5">
-                  {ctx.claude_md_disabled ? 'Disabled — agent responds as general assistant' : 'Enabled — full persona active'}
-                </p>
-              </div>
-              <button
-                onClick={toggleClaudeMd}
-                className={`shrink-0 w-11 h-6 rounded-full transition-colors duration-200 relative ${
-                  ctx.claude_md_disabled ? 'bg-surface-container-high' : 'bg-primary'
-                }`}
-              >
-                <span className={`block w-5 h-5 rounded-full bg-white shadow-sm absolute top-0.5 transition-transform duration-200 ${
-                  ctx.claude_md_disabled ? 'translate-x-0.5' : 'translate-x-[22px]'
-                }`} />
-              </button>
+          <div className="bg-surface-container-highest/50 rounded-xl p-3 border border-outline-variant/10">
+            <div className="flex items-center gap-2">
+              <span className={`material-symbols-outlined text-[14px] ${sessionMode === 'plain' ? 'text-on-surface-variant' : 'text-primary'}`}>
+                {sessionMode === 'plain' ? 'smart_toy' : 'face'}
+              </span>
+              <p className="text-[11px] text-on-surface-variant/60">
+                {sessionMode === 'plain'
+                  ? 'Plain mode — no persona, no mood, no memory. Clean Claude.'
+                  : 'Persona mode — full identity, mood, memory, and behavior rules.'}
+              </p>
             </div>
           </div>
         </div>
@@ -590,6 +576,7 @@ export function ContextPage({ authenticated }: { authenticated: boolean }) {
                 key={sid}
                 sessionId={sid}
                 sessionName={session.name}
+                sessionMode={session.mode || 'persona'}
                 authenticated={authenticated}
               />
             ) : null;

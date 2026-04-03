@@ -72,12 +72,19 @@ export function loadGroupConfig(folder?: string): GroupConfig {
       },
     };
     logger.info(
-      { group: loaded.group_folder, assistant: loaded.assistant.name, user: loaded.user.name },
+      {
+        group: loaded.group_folder,
+        assistant: loaded.assistant.name,
+        user: loaded.user.name,
+      },
       'Group config loaded',
     );
     return loaded;
   } catch (err) {
-    logger.error({ err, configPath }, 'Failed to parse group.json, using defaults');
+    logger.error(
+      { err, configPath },
+      'Failed to parse group.json, using defaults',
+    );
     loaded = { ...defaults };
     return loaded;
   }
@@ -96,10 +103,24 @@ export function getGroupConfig(): GroupConfig {
 }
 
 // Convenience getters
-export function getGroupFolder(): string { return getGroupConfig().group_folder; }
-export function getGroupJid(): string { return getGroupConfig().group_jid; }
-export function getTimezone(): string { return getGroupConfig().timezone; }
-export function getAssistantName(): string { return getGroupConfig().assistant.name; }
-export function getUserName(): string { return getGroupConfig().user.name; }
-export function getUserSenderId(): string { return getGroupConfig().user.sender_id; }
-export function getGroupDir(): string { return path.join(GROUPS_DIR, getGroupFolder()); }
+export function getGroupFolder(): string {
+  return getGroupConfig().group_folder;
+}
+export function getGroupJid(): string {
+  return getGroupConfig().group_jid;
+}
+export function getTimezone(): string {
+  return getGroupConfig().timezone;
+}
+export function getAssistantName(): string {
+  return getGroupConfig().assistant.name;
+}
+export function getUserName(): string {
+  return getGroupConfig().user.name;
+}
+export function getUserSenderId(): string {
+  return getGroupConfig().user.sender_id;
+}
+export function getGroupDir(): string {
+  return path.join(GROUPS_DIR, getGroupFolder());
+}

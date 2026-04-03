@@ -150,6 +150,13 @@ function createSchema(database: Database.Database): void {
     );
   `);
 
+  // Add mode column to web_sessions (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE web_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'persona'`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add session_id column to messages (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN session_id TEXT`);
@@ -650,16 +657,17 @@ export function deleteMessage(id: string, chatJid: string): void {
 export interface WebSession {
   id: string;
   name: string;
+  mode: 'persona' | 'plain';
   created_at: string;
   updated_at: string;
 }
 
-export function createWebSession(id: string, name: string): WebSession {
+export function createWebSession(id: string, name: string, mode: 'persona' | 'plain' = 'persona'): WebSession {
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO web_sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-  ).run(id, name, now, now);
-  return { id, name, created_at: now, updated_at: now };
+    `INSERT INTO web_sessions (id, name, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run(id, name, mode, now, now);
+  return { id, name, mode, created_at: now, updated_at: now };
 }
 
 export function getWebSessionById(id: string): WebSession | undefined {

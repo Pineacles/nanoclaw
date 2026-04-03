@@ -11,7 +11,7 @@ interface Props {
   sessions: WebSession[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;
-  onCreateSession: (name?: string) => void;
+  onCreateSession: (name?: string, mode?: 'persona' | 'plain') => void;
   onRenameSession: (id: string, name: string) => void;
   onDeleteSession: (id: string) => void;
   onNavigate: (view: View) => void;

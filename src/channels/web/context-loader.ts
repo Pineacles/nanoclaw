@@ -29,7 +29,9 @@ function loadFromDisk(): string {
 
   const blocks: string[] = [];
   for (const file of files) {
-    const content = fs.readFileSync(path.join(contextDir, file), 'utf-8').trim();
+    const content = fs
+      .readFileSync(path.join(contextDir, file), 'utf-8')
+      .trim();
     if (content) {
       blocks.push(content);
     }
@@ -55,7 +57,11 @@ export function invalidateContextCache(): void {
 }
 
 /** List context files with metadata (for API) */
-export function listContextFiles(): Array<{ filename: string; size: number; modified: string }> {
+export function listContextFiles(): Array<{
+  filename: string;
+  size: number;
+  modified: string;
+}> {
   const contextDir = path.join(getGroupDir(), 'context');
   if (!fs.existsSync(contextDir)) return [];
 
@@ -75,7 +81,12 @@ export function listContextFiles(): Array<{ filename: string; size: number; modi
 
 /** Read a specific context file */
 export function readContextFile(filename: string): string | null {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return null;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return null;
   const filePath = path.join(getGroupDir(), 'context', filename);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, 'utf-8');
@@ -83,7 +94,12 @@ export function readContextFile(filename: string): string | null {
 
 /** Write a context file */
 export function writeContextFile(filename: string, content: string): boolean {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return false;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return false;
   if (!filename.endsWith('.md')) return false;
   const contextDir = path.join(getGroupDir(), 'context');
   fs.mkdirSync(contextDir, { recursive: true });
@@ -94,7 +110,12 @@ export function writeContextFile(filename: string, content: string): boolean {
 
 /** Delete a context file */
 export function deleteContextFile(filename: string): boolean {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return false;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return false;
   const filePath = path.join(getGroupDir(), 'context', filename);
   if (!fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);

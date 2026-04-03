@@ -35,7 +35,9 @@ function loadMoodBehaviors(): Record<string, MoodBehavior> {
       behaviorsCacheTime = now;
       return behaviorsCache!;
     }
-  } catch { /* fallback */ }
+  } catch {
+    /* fallback */
+  }
   behaviorsCache = {};
   behaviorsCacheTime = now;
   return behaviorsCache;
@@ -45,7 +47,6 @@ function loadMoodBehaviors(): Record<string, MoodBehavior> {
 
 export interface SessionContext {
   context: string;
-  claude_md_disabled: boolean;
 }
 
 function sessionContextDir(): string {
@@ -58,29 +59,34 @@ function sessionContextPath(sessionId: string): string {
 }
 
 export function getSessionContext(sessionId: string): SessionContext {
-  const fallback: SessionContext = { context: '', claude_md_disabled: false };
+  const fallback: SessionContext = { context: '' };
   const p = sessionContextPath(sessionId);
   try {
     if (fs.existsSync(p)) {
       const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      return {
-        context: raw.context || '',
-        claude_md_disabled: !!raw.claude_md_disabled,
-      };
+      return { context: raw.context || '' };
     }
-  } catch { /* fallback */ }
+  } catch {
+    /* fallback */
+  }
   return fallback;
 }
 
-export function saveSessionContext(sessionId: string, data: Partial<SessionContext>): SessionContext {
+export function saveSessionContext(
+  sessionId: string,
+  data: Partial<SessionContext>,
+): SessionContext {
   const dir = sessionContextDir();
   fs.mkdirSync(dir, { recursive: true });
   const existing = getSessionContext(sessionId);
   const merged: SessionContext = {
     context: data.context !== undefined ? data.context : existing.context,
-    claude_md_disabled: data.claude_md_disabled !== undefined ? data.claude_md_disabled : existing.claude_md_disabled,
   };
-  fs.writeFileSync(sessionContextPath(sessionId), JSON.stringify(merged, null, 2), 'utf-8');
+  fs.writeFileSync(
+    sessionContextPath(sessionId),
+    JSON.stringify(merged, null, 2),
+    'utf-8',
+  );
   return merged;
 }
 
@@ -88,7 +94,9 @@ export function deleteSessionContext(sessionId: string): void {
   const p = sessionContextPath(sessionId);
   try {
     if (fs.existsSync(p)) fs.unlinkSync(p);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -125,22 +133,8 @@ export function buildAgentContext(opts: {
     ? `Mood behavior: ${behavior.rules} Typical tone: ${behavior.tone}`
     : '';
 
-  // Per-session context and settings
+  // Per-session context
   const sessionCtx = getSessionContext(opts.sessionId);
-
-  // When identity is disabled, only inject time + session context (no mood, no memory, no context files)
-  if (sessionCtx.claude_md_disabled) {
-    const parts: string[] = [`Current time is ${zurichTime}`];
-    if (sessionCtx.context) {
-      parts.push(`Session context: ${sessionCtx.context}`);
-    }
-    if (opts.source === 'whatsapp') {
-      parts.push('Source: WhatsApp');
-    } else {
-      parts.push(`Chat session: ${opts.sessionId}`);
-    }
-    return `[System: ${parts.join('. ')}.]`;
-  }
 
   // Memory context (diary + recent memories)
   const memoryContext = buildMemoryContext(config.group_folder);
@@ -149,10 +143,7 @@ export function buildAgentContext(opts: {
   const contextFiles = loadContextFiles();
 
   // Assemble
-  const parts: string[] = [
-    `Current time is ${zurichTime}`,
-    moodLine,
-  ];
+  const parts: string[] = [`Current time is ${zurichTime}`, moodLine];
 
   if (behaviorBlock) {
     parts.push(behaviorBlock);
@@ -170,7 +161,9 @@ export function buildAgentContext(opts: {
   if (opts.source === 'whatsapp') {
     parts.push('Source: WhatsApp');
   } else {
-    parts.push(`Chat session: ${opts.sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions`);
+    parts.push(
+      `Chat session: ${opts.sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions`,
+    );
   }
 
   if (memoryContext) {
@@ -181,7 +174,11 @@ export function buildAgentContext(opts: {
 }
 
 /** Return the mood data for external use (e.g. storing with message) */
-export function getCurrentMood(): { current_mood: string; energy: number; activity: string } {
+export function getCurrentMood(): {
+  current_mood: string;
+  energy: number;
+  activity: string;
+} {
   return resolveMood();
 }
 

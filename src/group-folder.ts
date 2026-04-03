@@ -28,17 +28,24 @@ function ensureWithinBase(baseDir: string, resolvedPath: string): void {
   }
 }
 
+/** Strip virtual suffixes like `-plain` to get the real folder name */
+function resolveBaseFolder(folder: string): string {
+  return folder.replace(/-plain$/, '');
+}
+
 export function resolveGroupFolderPath(folder: string): string {
-  assertValidGroupFolder(folder);
-  const groupPath = path.resolve(GROUPS_DIR, folder);
+  const base = resolveBaseFolder(folder);
+  assertValidGroupFolder(base);
+  const groupPath = path.resolve(GROUPS_DIR, base);
   ensureWithinBase(GROUPS_DIR, groupPath);
   return groupPath;
 }
 
 export function resolveGroupIpcPath(folder: string): string {
-  assertValidGroupFolder(folder);
+  const base = resolveBaseFolder(folder);
+  assertValidGroupFolder(base);
   const ipcBaseDir = path.resolve(DATA_DIR, 'ipc');
-  const ipcPath = path.resolve(ipcBaseDir, folder);
+  const ipcPath = path.resolve(ipcBaseDir, base);
   ensureWithinBase(ipcBaseDir, ipcPath);
   return ipcPath;
 }

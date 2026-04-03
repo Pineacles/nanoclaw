@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 export interface WebSession {
   id: string;
   name: string;
+  mode: 'persona' | 'plain';
   created_at: string;
   updated_at: string;
 }
@@ -37,11 +38,12 @@ export function useSessions(authenticated: boolean) {
       .catch(() => {});
   }, [authenticated]);
 
-  const createSession = useCallback(async (name?: string) => {
+  const createSession = useCallback(async (name?: string, mode?: 'persona' | 'plain') => {
     const sessionName = name || `Chat ${Date.now().toString(36)}`;
     try {
       const session = await api.post<WebSession>('/api/sessions', {
         name: sessionName,
+        mode: mode || 'persona',
       });
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
