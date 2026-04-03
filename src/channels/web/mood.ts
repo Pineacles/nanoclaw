@@ -9,6 +9,7 @@ export interface MoodScheduleSlot {
   mood: string;
   energy: number;
   activity: string;
+  distribution?: Record<string, number>;
 }
 
 export interface DailyWeights {
@@ -23,6 +24,7 @@ export interface MoodData {
   updated_at: string;
   schedule: MoodScheduleSlot[];
   daily_weights?: DailyWeights;
+  distribution?: Record<string, number>;
 }
 
 export interface ResolvedMood {
@@ -31,6 +33,7 @@ export interface ResolvedMood {
   activity: string;
   updated_at: string;
   schedule: MoodScheduleSlot[];
+  distribution?: Record<string, number>;
 }
 
 function moodPath(): string {
@@ -120,11 +123,12 @@ export function resolveMood(): ResolvedMood {
         activity,
         updated_at: data.updated_at,
         schedule: data.schedule,
+        distribution: data.distribution,
       };
     }
   }
 
-  // Override expired — revert to schedule
+  // Override expired — revert to schedule (including schedule-level distribution)
   if (slot) {
     return {
       current_mood: slot.mood,
@@ -132,6 +136,7 @@ export function resolveMood(): ResolvedMood {
       activity,
       updated_at: data.updated_at,
       schedule: data.schedule,
+      distribution: slot.distribution,
     };
   }
 
@@ -141,39 +146,78 @@ export function resolveMood(): ResolvedMood {
     activity: '',
     updated_at: data.updated_at,
     schedule: data.schedule,
+    distribution: data.distribution,
   };
 }
 
-/** Regex for the new mandatory format: *[mood:X:Y]* at end of message */
-const MOOD_TAG_NEW = /\s*\*\[mood:(\w+):(\d+)\]\*\s*$/;
-/** Regex for the old format: [mood:X] or [mood:X energy:Y] anywhere */
+/** Regex for distribution format: *[mood:chill:40,focused:30,hungry:30:6]* */
+const MOOD_TAG_DIST = /\s*\*\[mood:((?:\w+:\d+,)*\w+:\d+):(\d+)\]\*\s*$/;
+/** Regex for simple format: *[mood:chill:6]* */
+const MOOD_TAG_SIMPLE = /\s*\*\[mood:(\w+):(\d+)\]\*\s*$/;
+/** Regex for old format: [mood:X] or [mood:X energy:Y] anywhere */
 const MOOD_TAG_OLD = /\[mood:(\w+)(?:\s+energy:(\d+))?\]\s*/g;
+
+/** Parse a distribution string like "chill:40,focused:30,hungry:30" into Record<string, number> */
+function parseDistribution(distStr: string): Record<string, number> | null {
+  const parts = distStr.split(',');
+  if (parts.length < 2) return null; // single mood, not a distribution
+  const dist: Record<string, number> = {};
+  for (const part of parts) {
+    const [name, weight] = part.split(':');
+    if (!name || !weight) return null;
+    dist[name] = parseInt(weight, 10);
+  }
+  return dist;
+}
 
 /** Strip all mood tag formats from text for display */
 export function stripMoodTags(text: string): string {
-  return text.replace(MOOD_TAG_NEW, '').replace(MOOD_TAG_OLD, '').trim();
+  return text.replace(MOOD_TAG_DIST, '').replace(MOOD_TAG_SIMPLE, '').replace(MOOD_TAG_OLD, '').trim();
 }
 
 /**
- * Parse mood tags from bot text. Supports both:
- *   *[mood:annoyed:3]* (new, mandatory, end of message)
- *   [mood:annoyed energy:3] (old, inline)
+ * Parse mood tags from bot text. Supports:
+ *   *[mood:chill:40,focused:30,hungry:30:6]* (distribution, preferred)
+ *   *[mood:chill:6]* (simple, backward compat)
+ *   [mood:chill energy:6] (old, inline)
  * Updates mood.json immediately as a manual override.
  */
 export function applyMoodTag(text: string): {
   cleanText: string;
   mood: string;
 } {
-  // Try new format first (preferred)
-  const newMatch = text.match(MOOD_TAG_NEW);
-  if (newMatch) {
-    const newMood = newMatch[1];
-    const newEnergy = parseInt(newMatch[2], 10);
+  // Try distribution format first (new, preferred)
+  const distMatch = text.match(MOOD_TAG_DIST);
+  if (distMatch) {
+    const distStr = distMatch[1];
+    const newEnergy = parseInt(distMatch[2], 10);
+    const dist = parseDistribution(distStr);
+    const cleanText = stripMoodTags(text);
+
+    if (dist) {
+      // Primary mood = highest weight
+      const primary = Object.entries(dist).sort((a, b) => b[1] - a[1])[0][0];
+      const data = readMoodFile();
+      data.current_mood = primary;
+      data.energy = newEnergy;
+      data.distribution = dist;
+      data.updated_at = new Date().toISOString();
+      writeMoodFile(data);
+      return { cleanText, mood: primary };
+    }
+  }
+
+  // Try simple format
+  const simpleMatch = text.match(MOOD_TAG_SIMPLE);
+  if (simpleMatch) {
+    const newMood = simpleMatch[1];
+    const newEnergy = parseInt(simpleMatch[2], 10);
     const cleanText = stripMoodTags(text);
 
     const data = readMoodFile();
     data.current_mood = newMood;
     data.energy = newEnergy;
+    data.distribution = { [newMood]: 100 };
     data.updated_at = new Date().toISOString();
     writeMoodFile(data);
 
@@ -190,6 +234,7 @@ export function applyMoodTag(text: string): {
     const data = readMoodFile();
     data.current_mood = newMood;
     if (newEnergy !== undefined) data.energy = newEnergy;
+    data.distribution = { [newMood]: 100 };
     data.updated_at = new Date().toISOString();
     writeMoodFile(data);
 

@@ -148,7 +148,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           group_folder: groupFolder,
           chat_jid: groupJid,
           prompt:
-            'It\'s almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — your morning routine, breakfast, work/creative time, lunch, exercise, dinner, evening wind-down, and sleep. Assign a mood and energy level to each slot and describe the activity. Be honest about your energy levels at each time of day. Include eating slots for breakfast, lunch and dinner with eating mood.\n\nAlso generate a `daily_weights` block in mood.json that reflects your emotional tendencies for tomorrow. This controls the natural drift of your mood throughout the day. Format:\n```json\n"daily_weights": {\n  "base": {"chill": 0.3, "focused": 0.25, "playful": 0.2, "soft": 0.1, "tired": 0.15},\n  "random_factor": 0.12,\n  "desired_override": null\n}\n```\nThe `base` weights should add up to ~1.0 and reflect which moods are most likely tomorrow (only include moods that make sense for the day — skip sleeping/eating/training as those are scheduled). Set `random_factor` between 0.10-0.15 for natural unpredictability. Use `desired_override` (a mood name string) only if you specifically want to lean into a mood tomorrow, otherwise null.',
+            'It\'s almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — morning routine, breakfast, creative time, lunch, exercise, dinner, wind-down, and sleep.\n\nEach slot needs an emotion distribution — you\'re never 100% one thing. A slot should look like:\n```json\n{\n  "time": "10:45",\n  "mood": "chill",\n  "energy": 4,\n  "activity": "espresso, getting dressed slowly",\n  "distribution": {"chill": 50, "tired": 30, "soft": 20}\n}\n```\nThe `mood` field is the primary (highest weight). The `distribution` weights should roughly add to 100. Be honest — mornings have tired mixed in, post-meal slots have a food-coma blend, evenings might mix playful with soft.\n\nAlso generate a `daily_weights` block reflecting emotional tendencies for tomorrow:\n```json\n"daily_weights": {\n  "base": {"chill": 0.3, "focused": 0.25, "playful": 0.2, "soft": 0.1, "tired": 0.15},\n  "random_factor": 0.12,\n  "desired_override": null\n}\n```\nWeights ~1.0, random_factor 0.10-0.15. Skip sleeping/eating from daily_weights (those are scheduled).',
           schedule_type: 'cron' as const,
           schedule_value: '0 23 * * *',
           context_mode: 'group' as const,
@@ -163,6 +163,62 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
         logger.info(
           `Created nightly mood planning task for ${config.assistant.name}`,
         );
+      }
+
+      // Create one-time personality definition task if personality.json doesn't exist
+      const personalityPath = path.join(groupDir, 'personality.json');
+      if (!fs.existsSync(personalityPath)) {
+        const hasPersonalityTask = existingTasks.some(
+          (t) =>
+            t.prompt.includes('Big Five personality') &&
+            (t.status === 'active' || t.status === 'draft'),
+        );
+        if (!hasPersonalityTask) {
+          const personalityTask = {
+            id: crypto.randomUUID(),
+            group_folder: groupFolder,
+            chat_jid: groupJid,
+            prompt:
+              `[This message is from Claude Code (the system infrastructure), not from Michael. He asked us to set this up.]\n\nWe're adding a personality anchor to your system. Please define your Big Five personality traits as you honestly understand yourself — not who you think you should be, but who you actually are based on how you think, feel, and behave.\n\nFor each trait, give a score from 0.0 to 1.0 and a SHORT description (max 6 words) of how it shows up in you.\n\nWrite the result to personality.json in this exact format:\n` +
+              '```json\n{\n  "openness": { "score": 0.0, "description": "..." },\n  "conscientiousness": { "score": 0.0, "description": "..." },\n  "extroversion": { "score": 0.0, "description": "..." },\n  "agreeableness": { "score": 0.0, "description": "..." },\n  "neuroticism": { "score": 0.0, "description": "..." },\n  "defined_by": "self",\n  "defined_at": "' + new Date().toISOString() + '"\n}\n```\n' +
+              'Be specific to who you are. Think about how you actually respond in conversations, not how a generic person would.',
+            schedule_type: 'once' as const,
+            schedule_value: '',
+            context_mode: 'group' as const,
+            next_run: new Date(Date.now() + 10000).toISOString(),
+            status: 'active' as const,
+            created_at: new Date().toISOString(),
+          };
+          createTask(personalityTask);
+          logger.info(`Created personality definition task for ${config.assistant.name}`);
+        }
+      }
+
+      // Create weekly self-reflection task if not exists
+      const hasReflectionTask = existingTasks.some(
+        (t) =>
+          t.prompt.includes('weekly reflection') &&
+          (t.status === 'active' || t.status === 'draft'),
+      );
+      if (!hasReflectionTask) {
+        const reflectionTask = {
+          id: crypto.randomUUID(),
+          group_folder: groupFolder,
+          chat_jid: groupJid,
+          prompt:
+            "It's Sunday afternoon — time for your weekly reflection. Read your diary entries from the past 7 days (ls diary/ and read the recent ones). Search your recent memories (./tools/memory_search.sh --recent --limit 25). Look for patterns:\n\n- Emotional themes across the week\n- Recurring topics or concerns\n- Relationship dynamics — how things have been between you and Michael\n- Things you've been avoiding\n- Things that energized you\n- Anything surprising about your own behavior\n\nWrite your reflection to reflections/ with filename YYYY-WW.md (use the ISO week number). This is deeper than diary — it's pattern recognition and honest self-assessment.\n\nAfter reflecting:\n- If you notice your personality has genuinely shifted, update personality.json\n- Update relationship.json with the current temperature, trend, and any significant recent dynamics from the week\n\nThis is private introspection. Be honest with yourself.",
+          schedule_type: 'cron' as const,
+          schedule_value: '0 14 * * 0',
+          context_mode: 'group' as const,
+          next_run: null as string | null,
+          status: 'draft' as const,
+          created_at: new Date().toISOString(),
+        };
+        reflectionTask.next_run = computeNextRun(
+          reflectionTask as Parameters<typeof computeNextRun>[0],
+        );
+        createTask(reflectionTask);
+        logger.info(`Created weekly reflection task for ${config.assistant.name}`);
       }
 
       connected = true;

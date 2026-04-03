@@ -630,7 +630,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
           // Build context from group config, mood, memory, and context/*.md files
           const mood = getCurrentMood();
-          const agentContext = buildAgentContext({ sessionId, source: 'web' });
+          const agentContext = buildAgentContext({ sessionId, source: 'web', messageHint: content.slice(0, 200) });
           const agentContent = isPlainSession
             ? `[System: Current time is ${new Date().toLocaleString('en-GB', { timeZone: getTimezone(), weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}. Chat session: ${sessionId}.]\n${content}`
             : `${agentContext}\n${content}`;
@@ -641,7 +641,9 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           // Plain sessions get their own pipeline JID so they run in a separate container
           // without persona/identity loaded
           const basePipelineJid = opts.whatsappBridgeJid || getGroupJid();
-          const pipelineJid = isPlainSession ? `${basePipelineJid}:plain` : basePipelineJid;
+          const pipelineJid = isPlainSession
+            ? `${basePipelineJid}:plain`
+            : basePipelineJid;
 
           // Store under the pipeline JID so messages are found by the message loop
           storeMessage({
@@ -879,7 +881,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
       // Build context from group config, mood, memory, and context/*.md files
       const mood = getCurrentMood();
-      const agentContext = buildAgentContext({ sessionId, source: 'whatsapp' });
+      const agentContext = buildAgentContext({ sessionId, source: 'whatsapp', messageHint: fullContent.slice(0, 200) });
       const agentContent = `${agentContext}\n${fullContent}`;
 
       touchWebSession(sessionId);

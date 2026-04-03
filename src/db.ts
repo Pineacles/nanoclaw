@@ -152,7 +152,9 @@ function createSchema(database: Database.Database): void {
 
   // Add mode column to web_sessions (migration for existing DBs)
   try {
-    database.exec(`ALTER TABLE web_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'persona'`);
+    database.exec(
+      `ALTER TABLE web_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'persona'`,
+    );
   } catch {
     /* column already exists */
   }
@@ -662,7 +664,11 @@ export interface WebSession {
   updated_at: string;
 }
 
-export function createWebSession(id: string, name: string, mode: 'persona' | 'plain' = 'persona'): WebSession {
+export function createWebSession(
+  id: string,
+  name: string,
+  mode: 'persona' | 'plain' = 'persona',
+): WebSession {
   const now = new Date().toISOString();
   db.prepare(
     `INSERT INTO web_sessions (id, name, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
