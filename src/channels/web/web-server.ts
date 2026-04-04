@@ -513,24 +513,35 @@ export function createWebServer(opts: WebServerOpts): WebServer {
     // Proxy /voice-ws to the Python voice server on port 3004
     // Uses raw TCP proxy — forward the upgrade request directly
     if (url.pathname === '/voice-ws') {
-      const targetSocket = net.createConnection({ host: '127.0.0.1', port: 3004 }, () => {
-        // Reconstruct the HTTP upgrade request for the target
-        const reqUrl = req.url || '/';
-        let rawReq = `GET ${reqUrl} HTTP/1.1\r\n`;
-        // Forward key headers
-        const forwardHeaders = ['host', 'upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol'];
-        for (const h of forwardHeaders) {
-          const val = req.headers[h];
-          if (val) rawReq += `${h}: ${val}\r\n`;
-        }
-        rawReq += '\r\n';
-        targetSocket.write(rawReq);
-        if (head.length > 0) targetSocket.write(head);
+      const targetSocket = net.createConnection(
+        { host: '127.0.0.1', port: 3004 },
+        () => {
+          // Reconstruct the HTTP upgrade request for the target
+          const reqUrl = req.url || '/';
+          let rawReq = `GET ${reqUrl} HTTP/1.1\r\n`;
+          // Forward key headers
+          const forwardHeaders = [
+            'host',
+            'upgrade',
+            'connection',
+            'sec-websocket-key',
+            'sec-websocket-version',
+            'sec-websocket-extensions',
+            'sec-websocket-protocol',
+          ];
+          for (const h of forwardHeaders) {
+            const val = req.headers[h];
+            if (val) rawReq += `${h}: ${val}\r\n`;
+          }
+          rawReq += '\r\n';
+          targetSocket.write(rawReq);
+          if (head.length > 0) targetSocket.write(head);
 
-        // Pipe bidirectionally
-        socket.pipe(targetSocket);
-        targetSocket.pipe(socket);
-      });
+          // Pipe bidirectionally
+          socket.pipe(targetSocket);
+          targetSocket.pipe(socket);
+        },
+      );
 
       targetSocket.on('error', () => {
         socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');

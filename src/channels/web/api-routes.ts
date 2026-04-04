@@ -694,7 +694,11 @@ export async function handleApiRoute(
     // Voice call transcript save
     if (p === '/api/voice/call-ended' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const transcript = body.transcript as { role: string; text: string; timestamp: string }[];
+      const transcript = body.transcript as {
+        role: string;
+        text: string;
+        timestamp: string;
+      }[];
       const durationSec = body.duration_seconds || 0;
 
       // Format transcript as markdown
