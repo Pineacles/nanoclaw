@@ -108,6 +108,13 @@ export function MoreSheet({
             <span className="material-symbols-outlined text-primary text-[22px]">draft</span>
             <span className="text-[11px] text-on-surface-variant font-medium">Context</span>
           </button>
+          <button
+            onClick={() => { onNavigate('voice'); onClose(); }}
+            className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-surface-container-high active:scale-95 transition-transform"
+          >
+            <span className="material-symbols-outlined text-primary text-[22px]" style={{ fontVariationSettings: "'FILL' 1" }}>call</span>
+            <span className="text-[11px] text-on-surface-variant font-medium">Voice</span>
+          </button>
         </div>
 
         {/* Sessions */}

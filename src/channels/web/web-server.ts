@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'net';
 import fs from 'fs';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -506,6 +507,41 @@ export function createWebServer(opts: WebServerOpts): WebServer {
       socket.destroy();
       return;
     }
+
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+    // Proxy /voice-ws to the Python voice server on port 3004
+    // Uses raw TCP proxy — forward the upgrade request directly
+    if (url.pathname === '/voice-ws') {
+      const targetSocket = net.createConnection({ host: '127.0.0.1', port: 3004 }, () => {
+        // Reconstruct the HTTP upgrade request for the target
+        const reqUrl = req.url || '/';
+        let rawReq = `GET ${reqUrl} HTTP/1.1\r\n`;
+        // Forward key headers
+        const forwardHeaders = ['host', 'upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol'];
+        for (const h of forwardHeaders) {
+          const val = req.headers[h];
+          if (val) rawReq += `${h}: ${val}\r\n`;
+        }
+        rawReq += '\r\n';
+        targetSocket.write(rawReq);
+        if (head.length > 0) targetSocket.write(head);
+
+        // Pipe bidirectionally
+        socket.pipe(targetSocket);
+        targetSocket.pipe(socket);
+      });
+
+      targetSocket.on('error', () => {
+        socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        socket.destroy();
+      });
+      socket.on('error', () => targetSocket.destroy());
+      socket.on('close', () => targetSocket.destroy());
+      targetSocket.on('close', () => socket.destroy());
+      return;
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
@@ -630,7 +666,11 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
           // Build context from group config, mood, memory, and context/*.md files
           const mood = getCurrentMood();
-          const agentContext = buildAgentContext({ sessionId, source: 'web', messageHint: content.slice(0, 200) });
+          const agentContext = buildAgentContext({
+            sessionId,
+            source: 'web',
+            messageHint: content.slice(0, 200),
+          });
           const agentContent = isPlainSession
             ? `[System: Current time is ${new Date().toLocaleString('en-GB', { timeZone: getTimezone(), weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}. Chat session: ${sessionId}.]\n${content}`
             : `${agentContext}\n${content}`;
@@ -881,7 +921,11 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
       // Build context from group config, mood, memory, and context/*.md files
       const mood = getCurrentMood();
-      const agentContext = buildAgentContext({ sessionId, source: 'whatsapp', messageHint: fullContent.slice(0, 200) });
+      const agentContext = buildAgentContext({
+        sessionId,
+        source: 'whatsapp',
+        messageHint: fullContent.slice(0, 200),
+      });
       const agentContent = `${agentContext}\n${fullContent}`;
 
       touchWebSession(sessionId);

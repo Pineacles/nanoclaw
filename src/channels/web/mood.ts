@@ -172,7 +172,11 @@ function parseDistribution(distStr: string): Record<string, number> | null {
 
 /** Strip all mood tag formats from text for display */
 export function stripMoodTags(text: string): string {
-  return text.replace(MOOD_TAG_DIST, '').replace(MOOD_TAG_SIMPLE, '').replace(MOOD_TAG_OLD, '').trim();
+  return text
+    .replace(MOOD_TAG_DIST, '')
+    .replace(MOOD_TAG_SIMPLE, '')
+    .replace(MOOD_TAG_OLD, '')
+    .trim();
 }
 
 /**

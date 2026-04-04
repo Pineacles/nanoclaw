@@ -691,6 +691,39 @@ export async function handleApiRoute(
       }
     }
 
+    // Voice call transcript save
+    if (p === '/api/voice/call-ended' && method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      const transcript = body.transcript as { role: string; text: string; timestamp: string }[];
+      const durationSec = body.duration_seconds || 0;
+
+      // Format transcript as markdown
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const timeStr = now.toTimeString().slice(0, 5).replace(':', '');
+      const filename = `call-${dateStr}-${timeStr}.md`;
+
+      const lines = [
+        `# Voice Call — ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`,
+        `**Duration:** ${Math.floor(durationSec / 60)}m ${durationSec % 60}s`,
+        '',
+        '---',
+        '',
+      ];
+      for (const entry of transcript) {
+        const speaker = entry.role === 'user' ? 'Michael' : 'Seyoung';
+        lines.push(`**${speaker}:** ${entry.text}`);
+        lines.push('');
+      }
+
+      const convDir = path.join(groupDir(), 'conversations');
+      fs.mkdirSync(convDir, { recursive: true });
+      fs.writeFileSync(path.join(convDir, filename), lines.join('\n'), 'utf-8');
+
+      json(res, { ok: true, file: filename });
+      return true;
+    }
+
     // System prompt (.system-prompt — persona/identity block)
     if (p === '/api/system-prompt') {
       const promptPath = path.join(groupDir(), '.system-prompt');

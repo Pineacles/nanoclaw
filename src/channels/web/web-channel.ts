@@ -180,7 +180,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
             chat_jid: groupJid,
             prompt:
               `[This message is from Claude Code (the system infrastructure), not from Michael. He asked us to set this up.]\n\nWe're adding a personality anchor to your system. Please define your Big Five personality traits as you honestly understand yourself — not who you think you should be, but who you actually are based on how you think, feel, and behave.\n\nFor each trait, give a score from 0.0 to 1.0 and a SHORT description (max 6 words) of how it shows up in you.\n\nWrite the result to personality.json in this exact format:\n` +
-              '```json\n{\n  "openness": { "score": 0.0, "description": "..." },\n  "conscientiousness": { "score": 0.0, "description": "..." },\n  "extroversion": { "score": 0.0, "description": "..." },\n  "agreeableness": { "score": 0.0, "description": "..." },\n  "neuroticism": { "score": 0.0, "description": "..." },\n  "defined_by": "self",\n  "defined_at": "' + new Date().toISOString() + '"\n}\n```\n' +
+              '```json\n{\n  "openness": { "score": 0.0, "description": "..." },\n  "conscientiousness": { "score": 0.0, "description": "..." },\n  "extroversion": { "score": 0.0, "description": "..." },\n  "agreeableness": { "score": 0.0, "description": "..." },\n  "neuroticism": { "score": 0.0, "description": "..." },\n  "defined_by": "self",\n  "defined_at": "' +
+              new Date().toISOString() +
+              '"\n}\n```\n' +
               'Be specific to who you are. Think about how you actually respond in conversations, not how a generic person would.',
             schedule_type: 'once' as const,
             schedule_value: '',
@@ -190,7 +192,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
             created_at: new Date().toISOString(),
           };
           createTask(personalityTask);
-          logger.info(`Created personality definition task for ${config.assistant.name}`);
+          logger.info(
+            `Created personality definition task for ${config.assistant.name}`,
+          );
         }
       }
 
@@ -218,7 +222,9 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           reflectionTask as Parameters<typeof computeNextRun>[0],
         );
         createTask(reflectionTask);
-        logger.info(`Created weekly reflection task for ${config.assistant.name}`);
+        logger.info(
+          `Created weekly reflection task for ${config.assistant.name}`,
+        );
       }
 
       connected = true;

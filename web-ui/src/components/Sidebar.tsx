@@ -1,7 +1,7 @@
 import { MoodBlob } from './MoodBlob';
 import type { MoodData } from '../hooks/useMood';
 
-export type View = 'sessions' | 'memory' | 'tasks' | 'actions' | 'context' | 'settings';
+export type View = 'sessions' | 'memory' | 'tasks' | 'actions' | 'context' | 'voice' | 'settings';
 
 interface Props {
   activeView: View;
@@ -16,6 +16,7 @@ const NAV_ITEMS: { key: View; icon: string; label: string }[] = [
   { key: 'tasks', icon: 'settings_remote', label: 'Background Jobs' },
   { key: 'actions', icon: 'bolt', label: 'Quick Actions' },
   { key: 'context', icon: 'draft', label: 'Context' },
+  { key: 'voice', icon: 'call', label: 'Voice Call' },
   { key: 'settings', icon: 'settings', label: 'Settings' },
 ];
 

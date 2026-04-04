@@ -57,11 +57,17 @@ interface PersonalityProfile {
   neuroticism: PersonalityTrait;
 }
 
-let personalityCache: { data: PersonalityProfile | null; time: number } = { data: null, time: 0 };
+let personalityCache: { data: PersonalityProfile | null; time: number } = {
+  data: null,
+  time: 0,
+};
 
 function loadPersonalityProfile(): string {
   const now = Date.now();
-  if (personalityCache.time && now - personalityCache.time < BEHAVIORS_CACHE_TTL) {
+  if (
+    personalityCache.time &&
+    now - personalityCache.time < BEHAVIORS_CACHE_TTL
+  ) {
     if (!personalityCache.data) return '';
     return formatPersonality(personalityCache.data);
   }
@@ -72,7 +78,9 @@ function loadPersonalityProfile(): string {
       personalityCache = { data: raw, time: now };
       return formatPersonality(raw);
     }
-  } catch { /* fallback */ }
+  } catch {
+    /* fallback */
+  }
   personalityCache = { data: null, time: now };
   return '';
 }
@@ -100,7 +108,10 @@ interface EmotionalState {
   updated_at: string;
 }
 
-let emotionalCache: { data: EmotionalState | null; time: number } = { data: null, time: 0 };
+let emotionalCache: { data: EmotionalState | null; time: number } = {
+  data: null,
+  time: 0,
+};
 const EMOTIONAL_CACHE_TTL = 30_000; // 30s — emotions change mid-conversation
 const EMOTIONAL_STALE_MS = 6 * 60 * 60 * 1000; // 6 hours — stale emotions decay
 
@@ -117,7 +128,9 @@ function loadEmotionalState(): string {
       emotionalCache = { data: raw, time: now };
       return formatEmotionalState(raw, now);
     }
-  } catch { /* fallback */ }
+  } catch {
+    /* fallback */
+  }
   emotionalCache = { data: null, time: now };
   return '';
 }
@@ -149,11 +162,17 @@ interface RelationshipState {
   updated_at: string;
 }
 
-let relationshipCache: { data: RelationshipState | null; time: number } = { data: null, time: 0 };
+let relationshipCache: { data: RelationshipState | null; time: number } = {
+  data: null,
+  time: 0,
+};
 
 function loadRelationshipState(): string {
   const now = Date.now();
-  if (relationshipCache.time && now - relationshipCache.time < BEHAVIORS_CACHE_TTL) {
+  if (
+    relationshipCache.time &&
+    now - relationshipCache.time < BEHAVIORS_CACHE_TTL
+  ) {
     if (!relationshipCache.data) return '';
     return formatRelationship(relationshipCache.data);
   }
@@ -164,14 +183,17 @@ function loadRelationshipState(): string {
       relationshipCache = { data: raw, time: now };
       return formatRelationship(raw);
     }
-  } catch { /* fallback */ }
+  } catch {
+    /* fallback */
+  }
   relationshipCache = { data: null, time: 0 };
   return '';
 }
 
 function formatRelationship(r: RelationshipState): string {
-  const recent = (r.recent_dynamics || []).slice(-3)
-    .map(d => `${d.event} (${d.impact > 0 ? '+' : ''}${d.impact})`)
+  const recent = (r.recent_dynamics || [])
+    .slice(-3)
+    .map((d) => `${d.event} (${d.impact > 0 ? '+' : ''}${d.impact})`)
     .join('; ');
   return `Relationship with Michael: temperature ${r.temperature.toFixed(1)} (${r.trend})${recent ? ` — recent: ${recent}` : ''}`;
 }
@@ -262,12 +284,15 @@ export function buildAgentContext(opts: {
   const behaviors = loadMoodBehaviors();
 
   // Build blended mood line from distribution or single mood
-  const dist = mood.distribution && Object.keys(mood.distribution).length > 1
-    ? mood.distribution
-    : { [mood.current_mood]: 100 };
+  const dist =
+    mood.distribution && Object.keys(mood.distribution).length > 1
+      ? mood.distribution
+      : { [mood.current_mood]: 100 };
 
   // Sort by weight descending, take top 3
-  const sorted = Object.entries(dist).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const sorted = Object.entries(dist)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
   const blendParts = sorted.map(([name, weight]) => {
     const b = behaviors[name];
     // Use compressed description: first sentence of rules only
@@ -282,22 +307,34 @@ export function buildAgentContext(opts: {
   let constraintLine = '';
   if (personalityData) {
     const constraints: string[] = [];
-    if (personalityData.extroversion.score < 0.35) constraints.push('low extroversion — keep casual responses concise');
-    if (personalityData.neuroticism.score > 0.6) constraints.push('high neuroticism — emotional reactions are genuine');
-    if (personalityData.agreeableness.score < 0.4) constraints.push('low agreeableness — don\'t perform warmth');
-    if (personalityData.openness.score > 0.7) constraints.push('high openness — follow curiosity naturally');
+    if (personalityData.extroversion.score < 0.35)
+      constraints.push('low extroversion — keep casual responses concise');
+    if (personalityData.neuroticism.score > 0.6)
+      constraints.push('high neuroticism — emotional reactions are genuine');
+    if (personalityData.agreeableness.score < 0.4)
+      constraints.push("low agreeableness — don't perform warmth");
+    if (personalityData.openness.score > 0.7)
+      constraints.push('high openness — follow curiosity naturally');
     const primaryMood = sorted[0][0];
     const primaryWeight = sorted[0][1];
-    if (primaryWeight < 60) constraints.push(`mixed mood — blend writing styles, don't commit to one tone`);
-    if (primaryMood === 'sleeping' && primaryWeight > 50) constraints.push('mostly asleep — ultra-short responses');
-    if (constraints.length > 0) constraintLine = `Personality constraint: ${constraints.join('; ')}`;
+    if (primaryWeight < 60)
+      constraints.push(
+        `mixed mood — blend writing styles, don't commit to one tone`,
+      );
+    if (primaryMood === 'sleeping' && primaryWeight > 50)
+      constraints.push('mostly asleep — ultra-short responses');
+    if (constraints.length > 0)
+      constraintLine = `Personality constraint: ${constraints.join('; ')}`;
   }
 
   // Per-session context
   const sessionCtx = getSessionContext(opts.sessionId);
 
   // Memory context (diary + relevant memories + conversation summary)
-  const memoryContext = buildMemoryContext(config.group_folder, opts.messageHint);
+  const memoryContext = buildMemoryContext(
+    config.group_folder,
+    opts.messageHint,
+  );
 
   // User-defined context files
   const contextFiles = loadContextFiles();
@@ -352,7 +389,10 @@ export function getCurrentMood(): {
 /** Load raw personality data for constraint generation */
 function loadPersonalityData(): PersonalityProfile | null {
   const now = Date.now();
-  if (personalityCache.time && now - personalityCache.time < BEHAVIORS_CACHE_TTL) {
+  if (
+    personalityCache.time &&
+    now - personalityCache.time < BEHAVIORS_CACHE_TTL
+  ) {
     return personalityCache.data;
   }
   // loadPersonalityProfile() already populates the cache
@@ -403,7 +443,9 @@ function buildMemoryContext(groupFolder: string, messageHint?: string): string {
           .trim();
         const snippet =
           latest.length > 400 ? latest.slice(0, 400) + '...' : latest;
-        parts.push(`Last conversation summary (${summaries[0].replace('summary-', '').replace('.md', '')}): ${snippet}`);
+        parts.push(
+          `Last conversation summary (${summaries[0].replace('summary-', '').replace('.md', '')}): ${snippet}`,
+        );
       }
     }
   } catch {

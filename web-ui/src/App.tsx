@@ -12,6 +12,7 @@ import { TasksPage } from './components/TasksPage';
 import { QuickActionsPage } from './components/QuickActionsPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ContextPage } from './components/ContextPage';
+import { VoiceCallPage } from './components/VoiceCallPage';
 import { SessionsPanel } from './components/SessionsPanel';
 import { FilesPanel, countAttachments } from './components/FilesPanel';
 import { BottomNav } from './components/BottomNav';
@@ -158,6 +159,8 @@ export default function App() {
         );
       case 'context':
         return <ContextPage authenticated={authenticated} />;
+      case 'voice':
+        return <VoiceCallPage />;
       case 'settings':
         return (
           <SettingsPage
