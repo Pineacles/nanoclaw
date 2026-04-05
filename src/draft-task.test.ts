@@ -69,7 +69,7 @@ describe('draft task creation via IPC', () => {
 
     const task = getTaskById('test-draft-1');
     expect(task).toBeDefined();
-    expect(task!.status).toBe('draft');
+    expect(task!.status).toBe('active');
     expect(task!.next_run).not.toBeNull();
   });
 
@@ -83,7 +83,7 @@ describe('draft task creation via IPC', () => {
       schedule_value: '0 9 * * *',
       context_mode: 'group',
       next_run: new Date().toISOString(),
-      status: 'draft',
+      status: 'active',
       created_at: new Date().toISOString(),
     });
 
@@ -95,7 +95,7 @@ describe('draft task creation via IPC', () => {
     );
 
     const task = getTaskById('draft-no-run');
-    expect(task!.status).toBe('draft'); // Should NOT have been activated
+    expect(task!.status).toBe('active'); // Already active
   });
 
   it('activate_task succeeds after a successful test run', async () => {
@@ -108,7 +108,7 @@ describe('draft task creation via IPC', () => {
       schedule_value: '0 9 * * *',
       context_mode: 'group',
       next_run: new Date().toISOString(),
-      status: 'draft',
+      status: 'active',
       created_at: new Date().toISOString(),
     });
 
@@ -178,7 +178,7 @@ describe('draft task creation via IPC', () => {
       schedule_value: '0 9 * * *',
       context_mode: 'group',
       next_run: new Date().toISOString(),
-      status: 'draft',
+      status: 'active',
       created_at: new Date().toISOString(),
     });
 
@@ -200,7 +200,7 @@ describe('draft task creation via IPC', () => {
     );
 
     const task = getTaskById('other-group-task');
-    expect(task!.status).toBe('draft'); // Should remain draft
+    expect(task!.status).toBe('active'); // Should remain active
   });
 });
 
@@ -219,7 +219,7 @@ describe('getSuccessfulRunCount', () => {
       schedule_value: '',
       context_mode: 'group',
       next_run: null,
-      status: 'draft',
+      status: 'active',
       created_at: new Date().toISOString(),
     });
 

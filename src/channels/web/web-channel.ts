@@ -140,7 +140,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       const hasMoodTask = existingTasks.some(
         (t) =>
           t.prompt.includes('mood schedule') &&
-          (t.status === 'active' || t.status === 'draft'),
+          (t.status === 'active'),
       );
       if (!hasMoodTask) {
         const moodTask = {
@@ -171,7 +171,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
         const hasPersonalityTask = existingTasks.some(
           (t) =>
             t.prompt.includes('Big Five personality') &&
-            (t.status === 'active' || t.status === 'draft'),
+            (t.status === 'active'),
         );
         if (!hasPersonalityTask) {
           const personalityTask = {
@@ -202,7 +202,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       const hasReflectionTask = existingTasks.some(
         (t) =>
           t.prompt.includes('weekly reflection') &&
-          (t.status === 'active' || t.status === 'draft'),
+          (t.status === 'active'),
       );
       if (!hasReflectionTask) {
         const reflectionTask = {
@@ -215,7 +215,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           schedule_value: '0 14 * * 0',
           context_mode: 'group' as const,
           next_run: null as string | null,
-          status: 'draft' as const,
+          status: 'active' as const,
           created_at: new Date().toISOString(),
         };
         reflectionTask.next_run = computeNextRun(

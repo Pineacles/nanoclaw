@@ -296,11 +296,11 @@ export async function runTaskNow(
     { taskId, prompt: task.prompt.slice(0, 80) },
     'runTaskNow: starting',
   );
-  if (task.status !== 'active' && task.status !== 'draft') {
+  if (task.status !== 'active') {
     return {
       status: 'error',
       result: null,
-      error: `Task status is '${task.status}', must be 'active' or 'draft'`,
+      error: `Task status is '${task.status}', must be 'active'`,
       duration_ms: 0,
     };
   }

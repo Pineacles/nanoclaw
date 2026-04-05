@@ -269,7 +269,7 @@ export async function processTaskIpc(
           schedule_value: data.schedule_value,
           context_mode: contextMode,
           next_run: nextRun,
-          status: 'draft',
+          status: 'active',
           created_at: new Date().toISOString(),
         });
         logger.info(
@@ -337,7 +337,7 @@ export async function processTaskIpc(
       if (data.taskId) {
         const task = getTaskById(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
-          if (task.status !== 'draft') {
+          if (task.status !== 'active') {
             logger.warn(
               { taskId: data.taskId, status: task.status },
               'Cannot activate task: not in draft status',

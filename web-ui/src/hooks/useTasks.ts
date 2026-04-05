@@ -4,10 +4,11 @@ import type { TaskEvent } from './useChat';
 
 export interface Task {
   id: string;
+  title: string;
   prompt: string;
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
-  status: 'active' | 'paused' | 'completed' | 'draft';
+  status: 'active' | 'paused' | 'completed';
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

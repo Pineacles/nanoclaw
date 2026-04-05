@@ -93,6 +93,43 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add title column to scheduled_tasks (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN title TEXT DEFAULT ''`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Migrate draft tasks to active (draft status removed)
+  database.exec(
+    `UPDATE scheduled_tasks SET status = 'active' WHERE status = 'draft'`,
+  );
+
+  // Backfill titles for existing tasks without them
+  {
+    const untitled = database
+      .prepare(
+        `SELECT id, prompt FROM scheduled_tasks WHERE title IS NULL OR title = ''`,
+      )
+      .all() as Array<{ id: string; prompt: string }>;
+    const stmt = database.prepare(
+      `UPDATE scheduled_tasks SET title = ? WHERE id = ?`,
+    );
+    for (const t of untitled) {
+      // Generate title: first sentence, max 50 chars
+      const title =
+        t.prompt
+          .replace(/^\[.*?\]\s*/, '') // strip [System: ...] prefixes
+          .replace(/^You are \w+[.,]\s*/i, '') // strip "You are Seyoung."
+          .split(/[.!?\n]/)[0]
+          .trim()
+          .slice(0, 50) || 'Untitled Job';
+      stmt.run(title, t.id);
+    }
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -424,8 +461,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, title)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -438,6 +475,7 @@ export function createTask(
     task.next_run,
     task.status,
     task.created_at,
+    (task as Record<string, unknown>).title || '',
   );
 }
 
@@ -472,6 +510,7 @@ export function updateTask(
       | 'next_run'
       | 'status'
       | 'context_mode'
+      | 'title'
     >
   >,
 ): void {
@@ -501,6 +540,10 @@ export function updateTask(
   if (updates.status !== undefined) {
     fields.push('status = ?');
     values.push(updates.status);
+  }
+  if (updates.title !== undefined) {
+    fields.push('title = ?');
+    values.push(updates.title);
   }
 
   if (fields.length === 0) return;

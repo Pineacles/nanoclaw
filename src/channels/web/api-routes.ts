@@ -274,6 +274,9 @@ async function handleTaskCreate(
     }
   }
 
+  // Generate title from prompt (first 50 chars, first sentence)
+  const autoTitle = body.title || body.prompt.split(/[.!?\n]/)[0].slice(0, 50).trim() || 'Untitled Job';
+
   const task = {
     id: crypto.randomUUID(),
     group_folder: getGroupFolder(),
@@ -283,8 +286,9 @@ async function handleTaskCreate(
     schedule_value: body.schedule_value || '',
     context_mode: body.context_mode || ('group' as const),
     next_run: body.next_run || null,
-    status: 'draft' as const,
+    status: 'active' as const,
     created_at: new Date().toISOString(),
+    title: autoTitle,
   };
   // Auto-compute next_run for cron/interval tasks if not provided
   if (!task.next_run && task.schedule_type !== 'once') {
