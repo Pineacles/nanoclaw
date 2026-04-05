@@ -9,9 +9,20 @@ export interface WebSession {
   updated_at: string;
 }
 
+const SESSION_KEY = 'nanoclaw_active_session';
+const VIEW_KEY = 'nanoclaw_active_view';
+
 export function useSessions(authenticated: boolean) {
   const [sessions, setSessions] = useState<WebSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState('default');
+  const [activeSessionId, setActiveSessionIdRaw] = useState(() =>
+    localStorage.getItem(SESSION_KEY) || 'default'
+  );
+
+  // Persist activeSessionId to localStorage on every change
+  const setActiveSessionId = useCallback((id: string) => {
+    setActiveSessionIdRaw(id);
+    localStorage.setItem(SESSION_KEY, id);
+  }, []);
 
   // Load sessions on mount
   useEffect(() => {
@@ -20,7 +31,6 @@ export function useSessions(authenticated: boolean) {
       .get<WebSession[]>('/api/sessions')
       .then((data) => {
         if (data.length === 0) {
-          // Auto-create default session
           api
             .post<WebSession>('/api/sessions', { name: 'Chat 1' })
             .then((s) => {
@@ -29,8 +39,11 @@ export function useSessions(authenticated: boolean) {
             });
         } else {
           setSessions(data);
-          // If active session no longer exists, switch to first
-          if (!data.find((s) => s.id === activeSessionId)) {
+          // If saved session no longer exists, switch to first
+          const saved = localStorage.getItem(SESSION_KEY);
+          if (saved && data.find((s) => s.id === saved)) {
+            setActiveSessionIdRaw(saved);
+          } else if (!data.find((s) => s.id === activeSessionId)) {
             setActiveSessionId(data[0].id);
           }
         }

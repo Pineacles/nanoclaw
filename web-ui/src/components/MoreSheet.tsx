@@ -48,12 +48,15 @@ export function MoreSheet({
         </div>
 
         {/* Mood section */}
-        <div className="flex items-center gap-4 px-6 py-4 border-b border-outline-variant/10 shrink-0">
-          <MoodBlob mood={mood} size="sm" />
+        <div className="flex items-center gap-4 px-6 py-4 border-b border-outline-variant/10 shrink-0 overflow-hidden">
+          <MoodBlob mood={mood} size="sm" collapsed />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-on-surface capitalize">{mood.current_mood || 'chill'}</p>
+            {mood.activity && (
+              <p className="text-[11px] text-on-surface-variant/70 italic truncate mt-0.5">{mood.activity}</p>
+            )}
             {mood.energy !== undefined && (
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-2 mt-1.5">
                 <div className="flex gap-0.5">
                   {Array.from({ length: 10 }).map((_, i) => (
                     <div
@@ -74,7 +77,7 @@ export function MoreSheet({
         </div>
 
         {/* Quick links */}
-        <div className="grid grid-cols-4 gap-2 px-6 py-4 border-b border-outline-variant/10 shrink-0">
+        <div className="grid grid-cols-5 gap-1.5 px-4 py-4 border-b border-outline-variant/10 shrink-0">
           <button
             onClick={() => { onNavigate('actions'); onClose(); }}
             className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-surface-container-high active:scale-95 transition-transform"

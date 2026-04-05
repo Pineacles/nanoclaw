@@ -21,7 +21,14 @@ import { MOOD_COLORS } from './components/MoodBlob';
 
 export default function App() {
   const [authVersion, setAuthVersion] = useState(0);
-  const [activeView, setActiveView] = useState<View>('sessions');
+  const [activeView, setActiveViewRaw] = useState<View>(() => {
+    const saved = localStorage.getItem('nanoclaw_active_view');
+    return (saved as View) || 'sessions';
+  });
+  const setActiveView = useCallback((view: View) => {
+    setActiveViewRaw(view);
+    localStorage.setItem('nanoclaw_active_view', view);
+  }, []);
   const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [showFilesPanel, setShowFilesPanel] = useState(false);
   const authenticated = !!getToken();
