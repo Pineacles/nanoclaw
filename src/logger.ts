@@ -59,7 +59,16 @@ function log(
   }
 }
 
-export const logger = {
+export const logger: Record<string, unknown> & {
+  debug: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  info: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  warn: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  error: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  fatal: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  child: () => typeof logger;
+  trace: (dataOrMsg: Record<string, unknown> | string, msg?: string) => void;
+  level: string;
+} = {
   debug: (dataOrMsg: Record<string, unknown> | string, msg?: string) =>
     log('debug', dataOrMsg, msg),
   info: (dataOrMsg: Record<string, unknown> | string, msg?: string) =>
@@ -70,6 +79,11 @@ export const logger = {
     log('error', dataOrMsg, msg),
   fatal: (dataOrMsg: Record<string, unknown> | string, msg?: string) =>
     log('fatal', dataOrMsg, msg),
+  // Pino-compatible stubs required by Baileys
+  child: () => logger,
+  trace: (dataOrMsg: Record<string, unknown> | string, msg?: string) =>
+    log('debug', dataOrMsg, msg),
+  level: 'info',
 };
 
 // Route uncaught errors through logger so they get timestamps in stderr
