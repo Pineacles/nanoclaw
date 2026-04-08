@@ -41,7 +41,8 @@ function loadMichaelSchedule(): string {
     michaelScheduleCache.time &&
     now - michaelScheduleCache.time < MICHAEL_CACHE_TTL
   ) {
-    if (michaelScheduleCache.data) return formatMichaelSchedule(michaelScheduleCache.data);
+    if (michaelScheduleCache.data)
+      return formatMichaelSchedule(michaelScheduleCache.data);
     return formatMichaelSchedule({});
   }
 
@@ -117,7 +118,12 @@ function formatMichaelSchedule(data: MichaelScheduleData): string {
     const upcomingStr = upcoming
       .map((o) => {
         const d = new Date(o.date + 'T12:00:00');
-        const day = d.toLocaleDateString('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' });
+        const day = d.toLocaleDateString('en-US', {
+          timeZone: tz,
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+        });
         return `${day}: ${o.label}`;
       })
       .join(', ');
@@ -426,7 +432,9 @@ export function buildAgentContext(opts: {
   for (const [name, weight] of sorted) {
     const b = behaviors[name];
     if (b) {
-      moodLines.push(`  ${weight}% ${name}: ${b.rules}${b.tone ? ` Examples: ${b.tone}` : ''}`);
+      moodLines.push(
+        `  ${weight}% ${name}: ${b.rules}${b.tone ? ` Examples: ${b.tone}` : ''}`,
+      );
     } else {
       moodLines.push(`  ${weight}% ${name}`);
     }

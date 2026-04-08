@@ -9,10 +9,28 @@ const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 // Activities containing these keywords are considered "solo" — interruptible by conversation
 const SOLO_KEYWORDS = [
-  'sleep', 'drawing', 'sketch', 'pilates', 'training', 'workout', 'gym',
-  'out', 'dinner', 'restaurant', 'café', 'cafe', 'walk', 'shopping',
-  'focused', 'deep work', 'meditating', 'yoga', 'running', 'skincare',
-  'shower', 'bath',
+  'sleep',
+  'drawing',
+  'sketch',
+  'pilates',
+  'training',
+  'workout',
+  'gym',
+  'out',
+  'dinner',
+  'restaurant',
+  'café',
+  'cafe',
+  'walk',
+  'shopping',
+  'focused',
+  'deep work',
+  'meditating',
+  'yoga',
+  'running',
+  'skincare',
+  'shower',
+  'bath',
 ];
 
 const INTERRUPT_WINDOW_MS = 20 * 60 * 1000; // 20 minutes
@@ -48,16 +66,24 @@ function resolveActivityInterrupt(
   const p = overridePath();
   try {
     if (fs.existsSync(p)) {
-      const existing: ActivityOverride = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      const existing: ActivityOverride = JSON.parse(
+        fs.readFileSync(p, 'utf-8'),
+      );
       // Override is valid only for the current block
       if (existing.block_time !== blockTime) {
         // Block changed — stale override, remove it
         fs.unlinkSync(p);
       } else {
         // Block still active — check if conversation went quiet
-        const cooldownSince = new Date(Date.now() - INTERRUPT_COOLDOWN_MS).toISOString();
+        const cooldownSince = new Date(
+          Date.now() - INTERRUPT_COOLDOWN_MS,
+        ).toISOString();
         let chatJid: string;
-        try { chatJid = getGroupJid(); } catch { return existing.override_activity; }
+        try {
+          chatJid = getGroupJid();
+        } catch {
+          return existing.override_activity;
+        }
         const recentCount = countRecentMessages(chatJid, cooldownSince);
         if (recentCount === 0) {
           // Silence — she drifted back to what she was doing
@@ -75,7 +101,9 @@ function resolveActivityInterrupt(
   if (!scheduleActivity || !isSoloActivity(scheduleActivity)) return null;
 
   // Count recent user messages
-  const sinceTimestamp = new Date(Date.now() - INTERRUPT_WINDOW_MS).toISOString();
+  const sinceTimestamp = new Date(
+    Date.now() - INTERRUPT_WINDOW_MS,
+  ).toISOString();
   let chatJid: string;
   try {
     chatJid = getGroupJid();
@@ -218,7 +246,8 @@ export function resolveMood(): ResolvedMood {
   const slot = findActiveSlot(data.schedule);
   const scheduleActivity = slot?.activity || '';
   const activity =
-    resolveActivityInterrupt(scheduleActivity, slot?.time || '') || scheduleActivity;
+    resolveActivityInterrupt(scheduleActivity, slot?.time || '') ||
+    scheduleActivity;
 
   // Check if agent overrode mood via tag within the last 15 minutes
   if (data.updated_at) {

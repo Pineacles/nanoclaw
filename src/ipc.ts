@@ -104,7 +104,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
-              } else if (data.type === 'file' && data.chatJid && data.filePath && deps.sendMedia) {
+              } else if (
+                data.type === 'file' &&
+                data.chatJid &&
+                data.filePath &&
+                deps.sendMedia
+              ) {
                 const targetGroup = registeredGroups[data.chatJid];
                 if (
                   isMain ||
@@ -115,9 +120,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   // /workspace/global/... → groups/global/...
                   let hostPath = data.filePath as string;
                   if (hostPath.startsWith('/workspace/group/')) {
-                    hostPath = path.join(GROUPS_DIR, sourceGroup, hostPath.slice('/workspace/group/'.length));
+                    hostPath = path.join(
+                      GROUPS_DIR,
+                      sourceGroup,
+                      hostPath.slice('/workspace/group/'.length),
+                    );
                   } else if (hostPath.startsWith('/workspace/global/')) {
-                    hostPath = path.join(GROUPS_DIR, 'global', hostPath.slice('/workspace/global/'.length));
+                    hostPath = path.join(
+                      GROUPS_DIR,
+                      'global',
+                      hostPath.slice('/workspace/global/'.length),
+                    );
                   }
 
                   if (!fs.existsSync(hostPath)) {
@@ -132,7 +145,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       voiceNote: data.voiceNote === true,
                     });
                     logger.info(
-                      { chatJid: data.chatJid, filePath: hostPath, sourceGroup },
+                      {
+                        chatJid: data.chatJid,
+                        filePath: hostPath,
+                        sourceGroup,
+                      },
                       'IPC file sent',
                     );
                   }

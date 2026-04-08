@@ -291,8 +291,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         let text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 
         // Suppress raw API errors from reaching the user and mark as error for retry
-        if (/overloaded_error|"type"\s*:\s*"error"|API Error|rate_limit_error|server_error/.test(text)) {
-          logger.warn({ group: group.name, raw: text.slice(0, 300) }, 'Suppressed API error from user output');
+        if (
+          /overloaded_error|"type"\s*:\s*"error"|API Error|rate_limit_error|server_error/.test(
+            text,
+          )
+        ) {
+          logger.warn(
+            { group: group.name, raw: text.slice(0, 300) },
+            'Suppressed API error from user output',
+          );
           text = '';
           hadError = true;
         }
@@ -749,8 +756,14 @@ async function main(): Promise<void> {
     sendMedia: (jid, media) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      if (!channel.sendMedia) throw new Error(`Channel ${channel.name} does not support media`);
-      return channel.sendMedia(jid, media.filePath, media.caption, media.voiceNote);
+      if (!channel.sendMedia)
+        throw new Error(`Channel ${channel.name} does not support media`);
+      return channel.sendMedia(
+        jid,
+        media.filePath,
+        media.caption,
+        media.voiceNote,
+      );
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

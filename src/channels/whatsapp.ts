@@ -299,28 +299,44 @@ export class WhatsAppChannel implements Channel {
             const group = groups[chatJid];
             if (hasMedia) {
               try {
-                const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
+                const uploadsDir = path.join(
+                  GROUPS_DIR,
+                  group.folder,
+                  'uploads',
+                );
                 fs.mkdirSync(uploadsDir, { recursive: true });
 
                 if (normalized.imageMessage) {
                   const buf = await downloadMediaMessage(msg, 'buffer', {});
                   if (Buffer.isBuffer(buf)) {
-                    const ext = (normalized.imageMessage.mimetype || 'image/jpeg').split('/')[1]?.split(';')[0] || 'jpg';
+                    const ext =
+                      (normalized.imageMessage.mimetype || 'image/jpeg')
+                        .split('/')[1]
+                        ?.split(';')[0] || 'jpg';
                     const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
                     fs.writeFileSync(path.join(uploadsDir, filename), buf);
                     content += `\n[Image: /workspace/group/uploads/${filename}]`;
-                    logger.info({ filename, size: buf.length }, 'WhatsApp image saved');
+                    logger.info(
+                      { filename, size: buf.length },
+                      'WhatsApp image saved',
+                    );
                   }
                 }
 
                 if (normalized.videoMessage) {
                   const buf = await downloadMediaMessage(msg, 'buffer', {});
                   if (Buffer.isBuffer(buf)) {
-                    const ext = (normalized.videoMessage.mimetype || 'video/mp4').split('/')[1]?.split(';')[0] || 'mp4';
+                    const ext =
+                      (normalized.videoMessage.mimetype || 'video/mp4')
+                        .split('/')[1]
+                        ?.split(';')[0] || 'mp4';
                     const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
                     fs.writeFileSync(path.join(uploadsDir, filename), buf);
                     content += `\n[Video: /workspace/group/uploads/${filename}]`;
-                    logger.info({ filename, size: buf.length }, 'WhatsApp video saved');
+                    logger.info(
+                      { filename, size: buf.length },
+                      'WhatsApp video saved',
+                    );
                   }
                 }
 
@@ -328,41 +344,65 @@ export class WhatsAppChannel implements Channel {
                   const buf = await downloadMediaMessage(msg, 'buffer', {});
                   if (Buffer.isBuffer(buf)) {
                     const isPtt = normalized.audioMessage.ptt;
-                    const ext = isPtt ? 'ogg' : ((normalized.audioMessage.mimetype || 'audio/ogg').split('/')[1]?.split(';')[0] || 'ogg');
+                    const ext = isPtt
+                      ? 'ogg'
+                      : (normalized.audioMessage.mimetype || 'audio/ogg')
+                          .split('/')[1]
+                          ?.split(';')[0] || 'ogg';
                     const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
                     fs.writeFileSync(path.join(uploadsDir, filename), buf);
                     content += `\n[${isPtt ? 'Voice' : 'Audio'}: /workspace/group/uploads/${filename}]`;
-                    logger.info({ filename, size: buf.length, isPtt }, 'WhatsApp audio saved');
+                    logger.info(
+                      { filename, size: buf.length, isPtt },
+                      'WhatsApp audio saved',
+                    );
                   }
                 }
 
                 if (normalized.documentMessage) {
                   const buf = await downloadMediaMessage(msg, 'buffer', {});
                   if (Buffer.isBuffer(buf)) {
-                    const originalName = normalized.documentMessage.fileName || 'document';
-                    const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                    const originalName =
+                      normalized.documentMessage.fileName || 'document';
+                    const safeName = originalName.replace(
+                      /[^a-zA-Z0-9._-]/g,
+                      '_',
+                    );
                     const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${safeName}`;
                     fs.writeFileSync(path.join(uploadsDir, filename), buf);
                     content += `\n[Document: /workspace/group/uploads/${filename}]`;
-                    logger.info({ filename, originalName, size: buf.length }, 'WhatsApp document saved');
+                    logger.info(
+                      { filename, originalName, size: buf.length },
+                      'WhatsApp document saved',
+                    );
                   }
                 }
 
                 if (normalized.stickerMessage) {
                   const buf = await downloadMediaMessage(msg, 'buffer', {});
                   if (Buffer.isBuffer(buf)) {
-                    const ext = (normalized.stickerMessage.mimetype || 'image/webp').split('/')[1]?.split(';')[0] || 'webp';
+                    const ext =
+                      (normalized.stickerMessage.mimetype || 'image/webp')
+                        .split('/')[1]
+                        ?.split(';')[0] || 'webp';
                     const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
                     fs.writeFileSync(path.join(uploadsDir, filename), buf);
                     content += `\n[Sticker: /workspace/group/uploads/${filename}]`;
                   }
                 }
               } catch (err) {
-                logger.warn({ err, chatJid }, 'Failed to download WhatsApp media');
-                if (normalized.imageMessage) content += '\n[Image: download failed]';
-                if (normalized.videoMessage) content += '\n[Video: download failed]';
-                if (normalized.audioMessage) content += '\n[Voice note: download failed]';
-                if (normalized.documentMessage) content += '\n[Document: download failed]';
+                logger.warn(
+                  { err, chatJid },
+                  'Failed to download WhatsApp media',
+                );
+                if (normalized.imageMessage)
+                  content += '\n[Image: download failed]';
+                if (normalized.videoMessage)
+                  content += '\n[Video: download failed]';
+                if (normalized.audioMessage)
+                  content += '\n[Voice note: download failed]';
+                if (normalized.documentMessage)
+                  content += '\n[Document: download failed]';
               }
             }
 
@@ -476,17 +516,41 @@ export class WhatsAppChannel implements Channel {
         // WhatsApp voice notes require OGG/Opus. Always convert non-ogg audio.
         if (ext !== 'ogg' && ext !== 'opus') {
           try {
-            const tmpIn = path.join(os.tmpdir(), `nanoclaw-${Date.now()}.${ext}`);
+            const tmpIn = path.join(
+              os.tmpdir(),
+              `nanoclaw-${Date.now()}.${ext}`,
+            );
             const tmpOut = path.join(os.tmpdir(), `nanoclaw-${Date.now()}.ogg`);
             fs.writeFileSync(tmpIn, buffer);
-            execSync(`ffmpeg -y -i ${tmpIn} -c:a libopus -b:a 64k -ac 1 -ar 48000 ${tmpOut}`, { timeout: 30000 });
+            execSync(
+              `ffmpeg -y -i ${tmpIn} -c:a libopus -b:a 64k -ac 1 -ar 48000 ${tmpOut}`,
+              { timeout: 30000 },
+            );
             audioBuf = fs.readFileSync(tmpOut);
             mimetype = 'audio/ogg; codecs=opus';
-            try { fs.unlinkSync(tmpIn); } catch { /* ignore */ }
-            try { fs.unlinkSync(tmpOut); } catch { /* ignore */ }
-            logger.info({ from: ext, size: buffer.length, convertedSize: audioBuf.length }, 'Converted audio to OGG/Opus');
+            try {
+              fs.unlinkSync(tmpIn);
+            } catch {
+              /* ignore */
+            }
+            try {
+              fs.unlinkSync(tmpOut);
+            } catch {
+              /* ignore */
+            }
+            logger.info(
+              {
+                from: ext,
+                size: buffer.length,
+                convertedSize: audioBuf.length,
+              },
+              'Converted audio to OGG/Opus',
+            );
           } catch (err) {
-            logger.warn({ err, ext }, 'ffmpeg conversion failed, sending as-is');
+            logger.warn(
+              { err, ext },
+              'ffmpeg conversion failed, sending as-is',
+            );
           }
         } else {
           mimetype = 'audio/ogg; codecs=opus';

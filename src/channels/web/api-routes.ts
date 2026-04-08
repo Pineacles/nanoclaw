@@ -710,10 +710,20 @@ export async function handleApiRoute(
     // FinPilot AI Agent endpoint
     if (p === '/api/finpilot/analyze' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const { analysis_type, system_prompt, user_prompt, market_data, transactions, model: requestModel } = body;
+      const {
+        analysis_type,
+        system_prompt,
+        user_prompt,
+        market_data,
+        transactions,
+        model: requestModel,
+      } = body;
 
       if (!system_prompt || !user_prompt) {
-        return (error(res, 'system_prompt and user_prompt required', 400), true);
+        return (
+          error(res, 'system_prompt and user_prompt required', 400),
+          true
+        );
       }
 
       try {
@@ -724,15 +734,19 @@ export async function handleApiRoute(
         try {
           const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
           apiKey = creds?.claudeAiOauth?.accessToken || apiKey;
-        } catch { /* fallback */ }
+        } catch {
+          /* fallback */
+        }
 
         // Build the full user message with data context
         let fullUserPrompt = user_prompt;
         if (market_data) {
-          fullUserPrompt += '\n\nMarket Data:\n' + JSON.stringify(market_data, null, 2);
+          fullUserPrompt +=
+            '\n\nMarket Data:\n' + JSON.stringify(market_data, null, 2);
         }
         if (transactions) {
-          fullUserPrompt += '\n\nTransactions:\n' + JSON.stringify(transactions, null, 2);
+          fullUserPrompt +=
+            '\n\nTransactions:\n' + JSON.stringify(transactions, null, 2);
         }
 
         // Call Claude API directly
@@ -745,21 +759,26 @@ export async function handleApiRoute(
         });
 
         const apiRes = await new Promise<string>((resolve, reject) => {
-          const apiReq = https.request({
-            hostname: 'api.anthropic.com',
-            path: '/v1/messages',
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': apiKey,
-              'anthropic-version': '2023-06-01',
-              'Content-Length': Buffer.byteLength(apiBody),
+          const apiReq = https.request(
+            {
+              hostname: 'api.anthropic.com',
+              path: '/v1/messages',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+                'Content-Length': Buffer.byteLength(apiBody),
+              },
             },
-          }, (apiResponse) => {
-            const chunks: Buffer[] = [];
-            apiResponse.on('data', (c: Buffer) => chunks.push(c));
-            apiResponse.on('end', () => resolve(Buffer.concat(chunks).toString()));
-          });
+            (apiResponse) => {
+              const chunks: Buffer[] = [];
+              apiResponse.on('data', (c: Buffer) => chunks.push(c));
+              apiResponse.on('end', () =>
+                resolve(Buffer.concat(chunks).toString()),
+              );
+            },
+          );
           apiReq.on('error', reject);
           apiReq.write(apiBody);
           apiReq.end();
@@ -768,7 +787,10 @@ export async function handleApiRoute(
         const result = JSON.parse(apiRes);
 
         if (result.error) {
-          return (error(res, result.error.message || 'Claude API error', 502), true);
+          return (
+            error(res, result.error.message || 'Claude API error', 502),
+            true
+          );
         }
 
         // Extract the text content

@@ -90,7 +90,11 @@ function parseFrontmatter(content: string): {
   return { meta, body };
 }
 
-function loadMeta(filename: string, content: string, stat: fs.Stats): WorkflowMeta {
+function loadMeta(
+  filename: string,
+  content: string,
+  stat: fs.Stats,
+): WorkflowMeta {
   const { meta } = parseFrontmatter(content);
   return {
     filename,
@@ -134,7 +138,12 @@ export function listWorkflows(): WorkflowMeta[] {
 
 /** Read a full workflow including body */
 export function readWorkflow(filename: string): Workflow | null {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return null;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return null;
   const filePath = path.join(workflowsDir(), filename);
   if (!fs.existsSync(filePath)) return null;
 
@@ -148,7 +157,12 @@ export function readWorkflow(filename: string): Workflow | null {
 
 /** Write/update a workflow file */
 export function writeWorkflow(filename: string, content: string): boolean {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return false;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return false;
   if (!filename.endsWith('.md')) return false;
   const dir = workflowsDir();
   fs.mkdirSync(dir, { recursive: true });
@@ -159,7 +173,12 @@ export function writeWorkflow(filename: string, content: string): boolean {
 
 /** Delete a workflow file */
 export function deleteWorkflow(filename: string): boolean {
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return false;
+  if (
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\')
+  )
+    return false;
   const filePath = path.join(workflowsDir(), filename);
   if (!fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
@@ -190,7 +209,8 @@ export function buildWorkflowSummary(sessionId?: string): string {
   if (visible.length === 0) return '';
 
   const lines = visible.map((w) => {
-    const triggers = w.triggers.length > 0 ? ` [triggers: ${w.triggers.join(', ')}]` : '';
+    const triggers =
+      w.triggers.length > 0 ? ` [triggers: ${w.triggers.join(', ')}]` : '';
     return `  - ${w.name}: ${w.description}${triggers} (file: workflows/${w.filename})`;
   });
 
