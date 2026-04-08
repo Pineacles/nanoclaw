@@ -53,6 +53,10 @@ export interface NewMessage {
   is_bot_message?: boolean;
   session_id?: string;
   mood?: string;
+  thread_id?: string;
+  reply_to_message_id?: string;
+  reply_to_message_content?: string;
+  reply_to_sender_name?: string;
 }
 
 export interface ScheduledTask {
@@ -60,6 +64,7 @@ export interface ScheduledTask {
   group_folder: string;
   chat_jid: string;
   prompt: string;
+  script?: string | null;
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
@@ -90,12 +95,7 @@ export interface Channel {
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
   // Optional: send a media file (image, audio, video, document).
-  sendMedia?(
-    jid: string,
-    filePath: string,
-    caption?: string,
-    voiceNote?: boolean,
-  ): Promise<void>;
+  sendMedia?(jid: string, filePath: string, caption?: string, voiceNote?: boolean): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean, sessionId?: string): Promise<void>;
   // Optional: real-time tool use status. Channels that support it show what the agent is doing.

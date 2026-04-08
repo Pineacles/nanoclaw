@@ -86,10 +86,10 @@ export class WhatsAppChannel implements Channel {
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
+        keys: makeCacheableSignalKeyStore(state.keys, logger as never),
       },
       printQRInTerminal: false,
-      logger,
+      logger: logger as never,
       browser: Browsers.macOS('Chrome'),
     });
 
