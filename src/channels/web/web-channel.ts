@@ -138,9 +138,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       // Create nightly mood planning task if not exists
       const existingTasks = getTasksForGroup(groupFolder);
       const hasMoodTask = existingTasks.some(
-        (t) =>
-          t.prompt.includes('mood schedule') &&
-          (t.status === 'active'),
+        (t) => t.prompt.includes('mood schedule') && t.status === 'active',
       );
       if (!hasMoodTask) {
         const moodTask = {
@@ -170,8 +168,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       if (!fs.existsSync(personalityPath)) {
         const hasPersonalityTask = existingTasks.some(
           (t) =>
-            t.prompt.includes('Big Five personality') &&
-            (t.status === 'active'),
+            t.prompt.includes('Big Five personality') && t.status === 'active',
         );
         if (!hasPersonalityTask) {
           const personalityTask = {
@@ -200,9 +197,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
 
       // Create weekly self-reflection task if not exists
       const hasReflectionTask = existingTasks.some(
-        (t) =>
-          t.prompt.includes('weekly reflection') &&
-          (t.status === 'active'),
+        (t) => t.prompt.includes('weekly reflection') && t.status === 'active',
       );
       if (!hasReflectionTask) {
         const reflectionTask = {

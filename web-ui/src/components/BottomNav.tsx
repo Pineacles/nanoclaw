@@ -1,6 +1,6 @@
 import type { View } from './Sidebar';
 
-type MobileView = 'sessions' | 'memory' | 'tasks' | 'more';
+type MobileView = 'sessions' | 'memory' | 'workflows' | 'more';
 
 interface Props {
   activeView: View;
@@ -12,7 +12,7 @@ interface Props {
 const ITEMS: { key: MobileView; icon: string; label: string }[] = [
   { key: 'sessions', icon: 'chat_bubble', label: 'Chat' },
   { key: 'memory', icon: 'auto_awesome', label: 'Memory' },
-  { key: 'tasks', icon: 'settings_remote', label: 'Tasks' },
+  { key: 'workflows', icon: 'account_tree', label: 'Flows' },
   { key: 'more', icon: 'more_horiz', label: 'More' },
 ];
 

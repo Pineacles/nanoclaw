@@ -79,11 +79,11 @@ export function MoreSheet({
         {/* Quick links */}
         <div className="grid grid-cols-5 gap-1.5 px-4 py-4 border-b border-outline-variant/10 shrink-0">
           <button
-            onClick={() => { onNavigate('actions'); onClose(); }}
+            onClick={() => { onNavigate('tasks'); onClose(); }}
             className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-surface-container-high active:scale-95 transition-transform"
           >
-            <span className="material-symbols-outlined text-primary text-[22px]">bolt</span>
-            <span className="text-[11px] text-on-surface-variant font-medium">Actions</span>
+            <span className="material-symbols-outlined text-primary text-[22px]">settings_remote</span>
+            <span className="text-[11px] text-on-surface-variant font-medium">Jobs</span>
           </button>
           <button
             onClick={() => { onOpenFiles(); onClose(); }}

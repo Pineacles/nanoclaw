@@ -3,13 +3,14 @@ import { getToken, setToken } from './lib/api';
 import { useChat } from './hooks/useChat';
 import { useMemory } from './hooks/useMemory';
 import { useTasks } from './hooks/useTasks';
+import { useWorkflows } from './hooks/useWorkflows';
 import { useSessions } from './hooks/useSessions';
 import { useMood } from './hooks/useMood';
 import { Chat } from './components/Chat';
 import { Sidebar, View } from './components/Sidebar';
 import { MemoryPage } from './components/MemoryPage';
+import { WorkflowsPage } from './components/WorkflowsPage';
 import { TasksPage } from './components/TasksPage';
-import { QuickActionsPage } from './components/QuickActionsPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ContextPage } from './components/ContextPage';
 import { VoiceCallPage } from './components/VoiceCallPage';
@@ -58,6 +59,7 @@ export default function App() {
       tasks.handleTaskEvent,
     );
   const memory = useMemory(authenticated);
+  const wf = useWorkflows(authenticated);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const attachmentCount = useMemo(() => countAttachments(messages), [messages]);
@@ -140,6 +142,19 @@ export default function App() {
             onDelete={memory.deleteFile}
           />
         );
+      case 'workflows':
+        return (
+          <WorkflowsPage
+            workflows={wf.workflows}
+            selectedWorkflow={wf.selectedWorkflow}
+            loading={wf.loading}
+            onSelect={wf.loadWorkflow}
+            onSave={wf.saveWorkflow}
+            onCreate={wf.createWorkflow}
+            onDelete={wf.deleteWorkflow}
+            onClearSelection={wf.clearSelection}
+          />
+        );
       case 'tasks':
         return (
           <TasksPage
@@ -152,16 +167,6 @@ export default function App() {
             runningTaskIds={tasks.runningTaskIds}
             taskProgress={tasks.taskProgress}
             taskResults={tasks.taskResults}
-          />
-        );
-      case 'actions':
-        return (
-          <QuickActionsPage
-            onSend={(prompt) => {
-              sendMessage(prompt);
-              setActiveView('sessions');
-            }}
-            authenticated={authenticated}
           />
         );
       case 'context':

@@ -1,8 +1,113 @@
 import fs from 'fs';
 import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
-import { getGroupFolder, getTimezone } from './group-config.js';
+import { countRecentMessages } from '../../db.js';
+import { getGroupFolder, getGroupJid, getTimezone } from './group-config.js';
 const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+/* ── Activity Interrupt ── */
+
+// Activities containing these keywords are considered "solo" — interruptible by conversation
+const SOLO_KEYWORDS = [
+  'sleep', 'drawing', 'sketch', 'pilates', 'training', 'workout', 'gym',
+  'out', 'dinner', 'restaurant', 'café', 'cafe', 'walk', 'shopping',
+  'focused', 'deep work', 'meditating', 'yoga', 'running', 'skincare',
+  'shower', 'bath',
+];
+
+const INTERRUPT_WINDOW_MS = 20 * 60 * 1000; // 20 minutes
+const INTERRUPT_THRESHOLD = 3; // messages needed to trigger interrupt
+const INTERRUPT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min silence → back to original activity
+
+interface ActivityOverride {
+  original_activity: string;
+  override_activity: string;
+  block_time: string; // the schedule slot time this override applies to
+  created_at: string;
+}
+
+function overridePath(): string {
+  return path.join(GROUPS_DIR, getGroupFolder(), 'activity_override.json');
+}
+
+function isSoloActivity(activity: string): boolean {
+  const lower = activity.toLowerCase();
+  return SOLO_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
+ * Check if the current schedule block should be interrupted based on
+ * recent conversation frequency. Returns the overridden activity string
+ * or null if no interrupt.
+ */
+function resolveActivityInterrupt(
+  scheduleActivity: string,
+  blockTime: string,
+): string | null {
+  // Check for existing valid override first
+  const p = overridePath();
+  try {
+    if (fs.existsSync(p)) {
+      const existing: ActivityOverride = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      // Override is valid only for the current block
+      if (existing.block_time !== blockTime) {
+        // Block changed — stale override, remove it
+        fs.unlinkSync(p);
+      } else {
+        // Block still active — check if conversation went quiet
+        const cooldownSince = new Date(Date.now() - INTERRUPT_COOLDOWN_MS).toISOString();
+        let chatJid: string;
+        try { chatJid = getGroupJid(); } catch { return existing.override_activity; }
+        const recentCount = countRecentMessages(chatJid, cooldownSince);
+        if (recentCount === 0) {
+          // Silence — she drifted back to what she was doing
+          fs.unlinkSync(p);
+          return null;
+        }
+        return existing.override_activity;
+      }
+    }
+  } catch {
+    // Corrupt file, ignore
+  }
+
+  // Only interrupt solo activities
+  if (!scheduleActivity || !isSoloActivity(scheduleActivity)) return null;
+
+  // Count recent user messages
+  const sinceTimestamp = new Date(Date.now() - INTERRUPT_WINDOW_MS).toISOString();
+  let chatJid: string;
+  try {
+    chatJid = getGroupJid();
+  } catch {
+    return null; // group config not loaded yet
+  }
+  const count = countRecentMessages(chatJid, sinceTimestamp);
+
+  if (count < INTERRUPT_THRESHOLD) return null;
+
+  // Extract the core activity for the override text
+  const core = scheduleActivity
+    .split('—')[0] // take part before em dash
+    .split(',')[0] // take part before comma
+    .trim()
+    .toLowerCase();
+
+  const override: ActivityOverride = {
+    original_activity: scheduleActivity,
+    override_activity: `chatting with Michael, pulled away from ${core}`,
+    block_time: blockTime,
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    fs.writeFileSync(p, JSON.stringify(override, null, 2), 'utf-8');
+  } catch {
+    // Non-critical — just return the override without persisting
+  }
+
+  return override.override_activity;
+}
 
 export interface MoodScheduleSlot {
   time: string;
@@ -109,9 +214,11 @@ function findActiveSlot(schedule: MoodScheduleSlot[]): MoodScheduleSlot | null {
 export function resolveMood(): ResolvedMood {
   const data = readMoodFile();
 
-  // Activity always comes from the schedule
+  // Activity from schedule, with conversation interrupt check
   const slot = findActiveSlot(data.schedule);
-  const activity = slot?.activity || '';
+  const scheduleActivity = slot?.activity || '';
+  const activity =
+    resolveActivityInterrupt(scheduleActivity, slot?.time || '') || scheduleActivity;
 
   // Check if agent overrode mood via tag within the last 15 minutes
   if (data.updated_at) {

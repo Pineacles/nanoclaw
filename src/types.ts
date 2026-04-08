@@ -89,6 +89,8 @@ export interface Channel {
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
+  // Optional: send a media file (image, audio, video, document).
+  sendMedia?(jid: string, filePath: string, caption?: string, voiceNote?: boolean): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean, sessionId?: string): Promise<void>;
   // Optional: real-time tool use status. Channels that support it show what the agent is doing.

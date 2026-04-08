@@ -40,6 +40,12 @@ import {
   saveSessionContext,
   deleteSessionContext,
 } from './context-builder.js';
+import {
+  listWorkflows,
+  readWorkflow,
+  writeWorkflow,
+  deleteWorkflow,
+} from './workflow-loader.js';
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -275,7 +281,13 @@ async function handleTaskCreate(
   }
 
   // Generate title from prompt (first 50 chars, first sentence)
-  const autoTitle = body.title || body.prompt.split(/[.!?\n]/)[0].slice(0, 50).trim() || 'Untitled Job';
+  const autoTitle =
+    body.title ||
+    body.prompt
+      .split(/[.!?\n]/)[0]
+      .slice(0, 50)
+      .trim() ||
+    'Untitled Job';
 
   const task = {
     id: crypto.randomUUID(),
@@ -695,6 +707,99 @@ export async function handleApiRoute(
       }
     }
 
+    // FinPilot AI Agent endpoint
+    if (p === '/api/finpilot/analyze' && method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      const { analysis_type, system_prompt, user_prompt, market_data, transactions, model: requestModel } = body;
+
+      if (!system_prompt || !user_prompt) {
+        return (error(res, 'system_prompt and user_prompt required', 400), true);
+      }
+
+      try {
+        // Read OAuth token from Claude Code credentials
+        const os = await import('os');
+        const credsPath = os.homedir() + '/.claude/.credentials.json';
+        let apiKey = 'placeholder';
+        try {
+          const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+          apiKey = creds?.claudeAiOauth?.accessToken || apiKey;
+        } catch { /* fallback */ }
+
+        // Build the full user message with data context
+        let fullUserPrompt = user_prompt;
+        if (market_data) {
+          fullUserPrompt += '\n\nMarket Data:\n' + JSON.stringify(market_data, null, 2);
+        }
+        if (transactions) {
+          fullUserPrompt += '\n\nTransactions:\n' + JSON.stringify(transactions, null, 2);
+        }
+
+        // Call Claude API directly
+        const https = await import('https');
+        const apiBody = JSON.stringify({
+          model: requestModel || 'claude-sonnet-4-20250514',
+          max_tokens: 4096,
+          system: system_prompt,
+          messages: [{ role: 'user', content: fullUserPrompt }],
+        });
+
+        const apiRes = await new Promise<string>((resolve, reject) => {
+          const apiReq = https.request({
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+              'Content-Length': Buffer.byteLength(apiBody),
+            },
+          }, (apiResponse) => {
+            const chunks: Buffer[] = [];
+            apiResponse.on('data', (c: Buffer) => chunks.push(c));
+            apiResponse.on('end', () => resolve(Buffer.concat(chunks).toString()));
+          });
+          apiReq.on('error', reject);
+          apiReq.write(apiBody);
+          apiReq.end();
+        });
+
+        const result = JSON.parse(apiRes);
+
+        if (result.error) {
+          return (error(res, result.error.message || 'Claude API error', 502), true);
+        }
+
+        // Extract the text content
+        const text = result.content?.[0]?.text || '';
+
+        // Try to parse as JSON, otherwise return as text
+        try {
+          const parsed = JSON.parse(text);
+          json(res, { content: parsed });
+        } catch {
+          // Try to extract JSON from markdown code blocks
+          const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            try {
+              const parsed = JSON.parse(jsonMatch[1].trim());
+              json(res, { content: parsed });
+            } catch {
+              json(res, { text });
+            }
+          } else {
+            json(res, { text });
+          }
+        }
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ err: msg }, 'FinPilot analyze error');
+        return (error(res, `Analysis failed: ${msg}`, 500), true);
+      }
+    }
+
     // Voice call transcript save
     if (p === '/api/voice/call-ended' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
@@ -744,6 +849,45 @@ export async function handleApiRoute(
       if (method === 'PUT') {
         const body = JSON.parse(await readBody(req));
         fs.writeFileSync(promptPath, body.content || '', 'utf-8');
+        json(res, { ok: true });
+        return true;
+      }
+    }
+
+    // Workflows
+    if (p === '/api/workflows' && method === 'GET') {
+      json(res, listWorkflows());
+      return true;
+    }
+    if (p === '/api/workflows' && method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      if (!body.filename || !body.filename.endsWith('.md')) {
+        return (error(res, 'filename must end with .md', 400), true);
+      }
+      if (!writeWorkflow(body.filename, body.content || ''))
+        return (error(res, 'Invalid filename', 400), true);
+      json(res, { ok: true }, 201);
+      return true;
+    }
+    const wfMatch = p.match(/^\/api\/workflows\/(.+)$/);
+    if (wfMatch) {
+      const filename = decodeURIComponent(wfMatch[1]);
+      if (method === 'GET') {
+        const wf = readWorkflow(filename);
+        if (!wf) return (error(res, 'Not found', 404), true);
+        json(res, wf);
+        return true;
+      }
+      if (method === 'PUT') {
+        const body = JSON.parse(await readBody(req));
+        if (!writeWorkflow(filename, body.content || ''))
+          return (error(res, 'Invalid filename', 400), true);
+        json(res, { ok: true });
+        return true;
+      }
+      if (method === 'DELETE') {
+        if (!deleteWorkflow(filename))
+          return (error(res, 'Not found', 404), true);
         json(res, { ok: true });
         return true;
       }

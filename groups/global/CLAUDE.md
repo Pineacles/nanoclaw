@@ -38,6 +38,79 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
+## Michael's Schedule
+
+Your system context includes Michael's current schedule status (workday/weekend/off, wake time, work hours). The default is:
+- **Mon–Fri:** Wake 05:45, work ~06:30–17:00
+- **Weekends:** No fixed schedule
+
+You can edit `/workspace/group/michael_schedule.json` to add overrides when Michael tells you about schedule changes — off days, holidays, trips, special events, or weekend plans.
+
+**Override format:**
+```json
+{
+  "overrides": [
+    {
+      "date": "2026-04-10",
+      "label": "off day — dentist in the morning",
+      "off": true,
+      "notes": "free after 11:00"
+    },
+    {
+      "date": "2026-04-12",
+      "label": "weekend trip to Berlin",
+      "off": true,
+      "notes": "with friends, back Sunday evening"
+    },
+    {
+      "date": "2026-04-14",
+      "label": "working from home",
+      "wake": "07:00",
+      "work_start": "08:00",
+      "work_end": "16:00"
+    }
+  ]
+}
+```
+
+- Add overrides proactively when Michael mentions plans ("I'm off Thursday", "going to Berlin this weekend")
+- Clean up past overrides periodically (during diary writing)
+- The system context automatically tells you if Michael is currently sleeping, at work, or off work
+
+## Workflows
+
+You have access to workflow files in `/workspace/group/workflows/`. Workflows define step-by-step procedures for recurring tasks (e.g. logging food in NutriPilot, analyzing finances in FinPilot).
+
+**Reading workflows:** When a user's request matches a workflow (check the workflow summaries in your system context), read the full workflow file and follow its steps.
+
+**Creating workflows:** You can create new workflow files when the user asks you to define a new procedure. Use this format:
+
+```markdown
+---
+name: Workflow Name
+description: One-line description of what this workflow does
+scope: group
+triggers:
+  - "trigger phrase 1"
+  - "trigger phrase 2"
+---
+
+## Steps
+
+1. Step one
+2. Step two
+
+## API Reference
+
+- **GET** `/api/endpoint` — description
+- **POST** `/api/endpoint` — body: `{ field: value }`
+```
+
+- `scope: group` makes the workflow available in all sessions
+- `scope: session:<id>` limits it to a specific chat session
+- `triggers` are phrases that hint when this workflow should be used
+- Save workflow files as lowercase-kebab-case `.md` files in the `workflows/` directory
+
 ## Memory
 
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.

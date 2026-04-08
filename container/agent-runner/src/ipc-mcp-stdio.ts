@@ -63,6 +63,38 @@ server.tool(
 );
 
 server.tool(
+  'send_file',
+  "Send a file (image, audio, video, document) to the user or group via WhatsApp. The file must exist in your workspace. Use this to send voice notes, images, PDFs, or any file.",
+  {
+    file_path: z.string().describe('Path to the file (e.g., /workspace/group/uploads/photo.jpg or /workspace/group/report.pdf)'),
+    caption: z.string().optional().describe('Optional caption/message to send with the file'),
+    voice_note: z.boolean().optional().describe('Set to true to send audio as a voice note (ptt) instead of an audio file'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const data: Record<string, string | boolean | undefined> = {
+      type: 'file',
+      chatJid,
+      filePath: args.file_path,
+      caption: args.caption || undefined,
+      voiceNote: args.voice_note || false,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `File queued for sending: ${path.basename(args.file_path)}` }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
@@ -147,7 +179,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Task ${taskId} created as DRAFT: ${args.schedule_type} - ${args.schedule_value}. The task will NOT run until activated. You should test it first using activate_task (which requires at least one successful test run), or tell the user the task needs testing before it goes live.` }],
+      content: [{ type: 'text' as const, text: `Task ${taskId} created and active: ${args.schedule_type} - ${args.schedule_value}. It will start running on schedule immediately. Use pause_task to pause it, or cancel_task to delete it.` }],
     };
   },
 );

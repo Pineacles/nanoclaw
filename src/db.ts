@@ -456,6 +456,20 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+/** Count non-bot messages in a chat since a given timestamp */
+export function countRecentMessages(
+  chatJid: string,
+  sinceTimestamp: string,
+): number {
+  const sql = `
+    SELECT COUNT(*) as cnt FROM messages
+    WHERE chat_jid = ? AND timestamp > ? AND is_bot_message = 0
+      AND content != '' AND content IS NOT NULL
+  `;
+  const row = db.prepare(sql).get(chatJid, sinceTimestamp) as { cnt: number };
+  return row?.cnt || 0;
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {

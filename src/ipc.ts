@@ -3,7 +3,7 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import {
   createTask,
@@ -16,8 +16,15 @@ import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
+export interface IpcMediaPayload {
+  filePath: string; // host-resolved absolute path
+  caption?: string;
+  voiceNote?: boolean;
+}
+
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMedia?: (jid: string, media: IpcMediaPayload) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -95,6 +102,44 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (data.type === 'file' && data.chatJid && data.filePath && deps.sendMedia) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  // Resolve container path to host path
+                  // /workspace/group/... → groups/<folder>/...
+                  // /workspace/global/... → groups/global/...
+                  let hostPath = data.filePath as string;
+                  if (hostPath.startsWith('/workspace/group/')) {
+                    hostPath = path.join(GROUPS_DIR, sourceGroup, hostPath.slice('/workspace/group/'.length));
+                  } else if (hostPath.startsWith('/workspace/global/')) {
+                    hostPath = path.join(GROUPS_DIR, 'global', hostPath.slice('/workspace/global/'.length));
+                  }
+
+                  if (!fs.existsSync(hostPath)) {
+                    logger.warn(
+                      { filePath: data.filePath, hostPath, sourceGroup },
+                      'IPC file not found on host',
+                    );
+                  } else {
+                    await deps.sendMedia(data.chatJid, {
+                      filePath: hostPath,
+                      caption: data.caption as string | undefined,
+                      voiceNote: data.voiceNote === true,
+                    });
+                    logger.info(
+                      { chatJid: data.chatJid, filePath: hostPath, sourceGroup },
+                      'IPC file sent',
+                    );
+                  }
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC file attempt blocked',
                   );
                 }
               }

@@ -1,5 +1,6 @@
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import makeWASocket, {
@@ -13,9 +14,11 @@ import makeWASocket, {
   downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 
+import crypto from 'crypto';
 import {
   ASSISTANT_HAS_OWN_NUMBER,
   ASSISTANT_NAME,
+  GROUPS_DIR,
   STORE_DIR,
 } from '../config.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
@@ -274,15 +277,97 @@ export class WhatsAppChannel implements Channel {
           // Only deliver full message for registered groups
           const groups = this.opts.registeredGroups();
           if (groups[chatJid]) {
-            const content =
+            let content =
               normalized.conversation ||
               normalized.extendedTextMessage?.text ||
               normalized.imageMessage?.caption ||
               normalized.videoMessage?.caption ||
+              normalized.documentMessage?.caption ||
               '';
 
-            // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
-            if (!content) continue;
+            const hasMedia =
+              !!normalized.imageMessage ||
+              !!normalized.videoMessage ||
+              !!normalized.audioMessage ||
+              !!normalized.documentMessage ||
+              !!normalized.stickerMessage;
+
+            // Skip protocol messages with no text and no media
+            if (!content && !hasMedia) continue;
+
+            // Download and save media attachments
+            const group = groups[chatJid];
+            if (hasMedia) {
+              try {
+                const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
+                fs.mkdirSync(uploadsDir, { recursive: true });
+
+                if (normalized.imageMessage) {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {});
+                  if (Buffer.isBuffer(buf)) {
+                    const ext = (normalized.imageMessage.mimetype || 'image/jpeg').split('/')[1]?.split(';')[0] || 'jpg';
+                    const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
+                    fs.writeFileSync(path.join(uploadsDir, filename), buf);
+                    content += `\n[Image: /workspace/group/uploads/${filename}]`;
+                    logger.info({ filename, size: buf.length }, 'WhatsApp image saved');
+                  }
+                }
+
+                if (normalized.videoMessage) {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {});
+                  if (Buffer.isBuffer(buf)) {
+                    const ext = (normalized.videoMessage.mimetype || 'video/mp4').split('/')[1]?.split(';')[0] || 'mp4';
+                    const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
+                    fs.writeFileSync(path.join(uploadsDir, filename), buf);
+                    content += `\n[Video: /workspace/group/uploads/${filename}]`;
+                    logger.info({ filename, size: buf.length }, 'WhatsApp video saved');
+                  }
+                }
+
+                if (normalized.audioMessage) {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {});
+                  if (Buffer.isBuffer(buf)) {
+                    const isPtt = normalized.audioMessage.ptt;
+                    const ext = isPtt ? 'ogg' : ((normalized.audioMessage.mimetype || 'audio/ogg').split('/')[1]?.split(';')[0] || 'ogg');
+                    const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
+                    fs.writeFileSync(path.join(uploadsDir, filename), buf);
+                    content += `\n[${isPtt ? 'Voice' : 'Audio'}: /workspace/group/uploads/${filename}]`;
+                    logger.info({ filename, size: buf.length, isPtt }, 'WhatsApp audio saved');
+                  }
+                }
+
+                if (normalized.documentMessage) {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {});
+                  if (Buffer.isBuffer(buf)) {
+                    const originalName = normalized.documentMessage.fileName || 'document';
+                    const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                    const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${safeName}`;
+                    fs.writeFileSync(path.join(uploadsDir, filename), buf);
+                    content += `\n[Document: /workspace/group/uploads/${filename}]`;
+                    logger.info({ filename, originalName, size: buf.length }, 'WhatsApp document saved');
+                  }
+                }
+
+                if (normalized.stickerMessage) {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {});
+                  if (Buffer.isBuffer(buf)) {
+                    const ext = (normalized.stickerMessage.mimetype || 'image/webp').split('/')[1]?.split(';')[0] || 'webp';
+                    const filename = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
+                    fs.writeFileSync(path.join(uploadsDir, filename), buf);
+                    content += `\n[Sticker: /workspace/group/uploads/${filename}]`;
+                  }
+                }
+              } catch (err) {
+                logger.warn({ err, chatJid }, 'Failed to download WhatsApp media');
+                if (normalized.imageMessage) content += '\n[Image: download failed]';
+                if (normalized.videoMessage) content += '\n[Video: download failed]';
+                if (normalized.audioMessage) content += '\n[Voice note: download failed]';
+                if (normalized.documentMessage) content += '\n[Document: download failed]';
+              }
+            }
+
+            // Still skip if no content after media processing
+            if (!content.trim()) continue;
 
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const senderName = msg.pushName || sender.split('@')[0];
@@ -348,6 +433,93 @@ export class WhatsAppChannel implements Channel {
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send, message queued',
       );
+    }
+  }
+
+  async sendMedia(
+    jid: string,
+    filePath: string,
+    caption?: string,
+    voiceNote?: boolean,
+  ): Promise<void> {
+    if (!this.connected) {
+      logger.warn({ jid, filePath }, 'WA disconnected, cannot send media');
+      return;
+    }
+
+    const buffer = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    const filename = path.basename(filePath);
+
+    // Determine media type from extension
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    const videoExts = ['mp4', 'mkv', 'avi', 'mov', '3gp'];
+    const audioExts = ['ogg', 'mp3', 'wav', 'aac', 'm4a', 'opus'];
+
+    try {
+      if (imageExts.includes(ext)) {
+        await this.sock.sendMessage(jid, {
+          image: buffer,
+          caption: caption || undefined,
+        });
+      } else if (videoExts.includes(ext)) {
+        await this.sock.sendMessage(jid, {
+          video: buffer,
+          caption: caption || undefined,
+        });
+      } else if (audioExts.includes(ext)) {
+        let audioBuf = buffer;
+        let mimetype = `audio/${ext}`;
+        // Default to voice note for WhatsApp audio (more natural)
+        const sendAsPtt = voiceNote !== false;
+
+        // WhatsApp voice notes require OGG/Opus. Always convert non-ogg audio.
+        if (ext !== 'ogg' && ext !== 'opus') {
+          try {
+            const tmpIn = path.join(os.tmpdir(), `nanoclaw-${Date.now()}.${ext}`);
+            const tmpOut = path.join(os.tmpdir(), `nanoclaw-${Date.now()}.ogg`);
+            fs.writeFileSync(tmpIn, buffer);
+            execSync(`ffmpeg -y -i ${tmpIn} -c:a libopus -b:a 64k -ac 1 -ar 48000 ${tmpOut}`, { timeout: 30000 });
+            audioBuf = fs.readFileSync(tmpOut);
+            mimetype = 'audio/ogg; codecs=opus';
+            try { fs.unlinkSync(tmpIn); } catch { /* ignore */ }
+            try { fs.unlinkSync(tmpOut); } catch { /* ignore */ }
+            logger.info({ from: ext, size: buffer.length, convertedSize: audioBuf.length }, 'Converted audio to OGG/Opus');
+          } catch (err) {
+            logger.warn({ err, ext }, 'ffmpeg conversion failed, sending as-is');
+          }
+        } else {
+          mimetype = 'audio/ogg; codecs=opus';
+        }
+
+        await this.sock.sendMessage(jid, {
+          audio: audioBuf,
+          ptt: sendAsPtt,
+          mimetype,
+        });
+      } else {
+        // Send as document for everything else (pdf, docx, zip, etc.)
+        const mimeMap: Record<string, string> = {
+          pdf: 'application/pdf',
+          doc: 'application/msword',
+          docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          xls: 'application/vnd.ms-excel',
+          xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          csv: 'text/csv',
+          txt: 'text/plain',
+          zip: 'application/zip',
+          json: 'application/json',
+        };
+        await this.sock.sendMessage(jid, {
+          document: buffer,
+          mimetype: mimeMap[ext] || 'application/octet-stream',
+          fileName: filename,
+          caption: caption || undefined,
+        });
+      }
+      logger.info({ jid, filePath, ext }, 'Media sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send media');
     }
   }
 
