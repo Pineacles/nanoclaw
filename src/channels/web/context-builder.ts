@@ -13,6 +13,7 @@ import { loadContextFiles } from './context-loader.js';
 import { buildWorkflowSummary } from './workflow-loader.js';
 import { getRecentMemories, searchMemories } from '../../memory-db.js';
 import { getCachedMoodStyle } from './mood-style.js';
+import { getRecentMoods } from '../../db.js';
 
 /* ── Workspace File Index ── */
 
@@ -49,33 +50,46 @@ function buildFileIndex(): string {
       const annotation = FILE_ANNOTATIONS[f] || '';
       lines.push(`  ${f}${annotation ? ` — ${annotation}` : ''}`);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Context files
   try {
     const ctxDir = path.join(groupDir, 'context');
     if (fs.existsSync(ctxDir)) {
-      const ctxFiles = fs.readdirSync(ctxDir).filter((f) => f.endsWith('.md')).sort();
+      const ctxFiles = fs
+        .readdirSync(ctxDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
       for (const f of ctxFiles) {
         lines.push(`  context/${f}`);
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Workflow files
   try {
     const wfDir = path.join(groupDir, 'workflows');
     if (fs.existsSync(wfDir)) {
-      const wfFiles = fs.readdirSync(wfDir).filter((f) => f.endsWith('.md')).sort();
+      const wfFiles = fs
+        .readdirSync(wfDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
       for (const f of wfFiles) {
         lines.push(`  workflows/${f}`);
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
-  const result = lines.length > 0
-    ? `Workspace files (/workspace/group/):\n${lines.join('\n')}`
-    : '';
+  const result =
+    lines.length > 0
+      ? `Workspace files (/workspace/group/):\n${lines.join('\n')}`
+      : '';
   fileIndexCache = { data: result, time: now };
   return result;
 }
@@ -507,6 +521,44 @@ function buildMoodLine(groupFolder: string): string {
 }
 
 /**
+ * Build a "Recent mood pattern" section for the system prompt.
+ * Shows the last N primary moods Seyoung emitted, plus a sharp nudge
+ * if she's been stuck on the same 1-2 moods for 4+ of the last 5 messages.
+ * The nudge fires every message until she actually breaks pattern,
+ * creating a tight feedback loop.
+ */
+function buildMoodHistorySection(chatJid: string): string {
+  const moods = getRecentMoods(chatJid, 8);
+  if (moods.length === 0) return '';
+
+  // Show oldest → newest with arrow separators
+  const trail = moods.join(' → ');
+  let section = `Seyoung's recent mood pattern (last ${moods.length}, oldest → newest): ${trail}`;
+
+  // Stuck detector: 4+ of the last 5 share the same 1-2 categories
+  if (moods.length >= 5) {
+    const last5 = moods.slice(-5);
+    const counts = new Map<string, number>();
+    for (const m of last5) counts.set(m, (counts.get(m) || 0) + 1);
+    const sortedCats = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const top1 = sortedCats[0];
+    const top2 = sortedCats[1];
+    const top1Count = top1?.[1] || 0;
+    const top2Count = top2?.[1] || 0;
+    const isStuck = (top1Count >= 4) || (top1Count + top2Count >= 5 && sortedCats.length <= 2);
+
+    if (isStuck) {
+      const stuckCats = top2 && top1Count + top2Count >= 5 && sortedCats.length <= 2
+        ? `${top1[0]}/${top2[0]}`
+        : top1[0];
+      section += `\n\nNOTICE: You've been ${stuckCats} for ${top1Count + (top2 ? top2Count : 0)} of the last 5 messages. That's the safe pick winning. Look at Michael's actual current message — what would you really feel right now if you let yourself? Pick that, not the safe one. Bold mood picks are more honest than safe ones.`;
+    }
+  }
+
+  return section;
+}
+
+/**
  * Returns true if the cached distribution is stale relative to the current one.
  * "Stale" means: different mood set, or any weight shifted by >= 10pt.
  */
@@ -533,6 +585,7 @@ function shouldCacheStyleBeSkipped(
 export function buildSystemAppend(opts: {
   sessionId: string;
   groupFolder: string;
+  chatJid?: string;  // optional for backwards compat with the buildAgentContext wrapper
 }): string {
   const groupDir = getGroupDir();
   const sections: string[] = [];
@@ -564,11 +617,15 @@ export function buildSystemAppend(opts: {
     const primaryWeight = sorted[0][1];
     const primaryMood = sorted[0][0];
     if (primaryWeight < 60)
-      constraints.push(`mixed mood — blend writing styles, don't commit to one tone`);
+      constraints.push(
+        `mixed mood — blend writing styles, don't commit to one tone`,
+      );
     if (primaryMood === 'sleeping' && primaryWeight > 50)
       constraints.push('mostly asleep — ultra-short responses');
     if (constraints.length > 0)
-      sections.push(`Seyoung's personality constraint: ${constraints.join('; ')}`);
+      sections.push(
+        `Seyoung's personality constraint: ${constraints.join('; ')}`,
+      );
   }
 
   // Relationship state
@@ -594,6 +651,12 @@ export function buildSystemAppend(opts: {
   // Workspace file index
   const fileIndex = buildFileIndex();
   if (fileIndex) sections.push(fileIndex);
+
+  // Recent mood pattern + stuck nudge (only if we know the chat JID)
+  if (opts.chatJid) {
+    const moodHistory = buildMoodHistorySection(opts.chatJid);
+    if (moodHistory) sections.push(moodHistory);
+  }
 
   return sections.join('\n\n');
 }
@@ -649,7 +712,10 @@ export function buildPerMessagePrefix(opts: {
   }
 
   // Relevant memories (tied to what the user just said — stays per-message)
-  const messageMemory = buildMessageMemoryContext(opts.groupFolder, opts.messageHint);
+  const messageMemory = buildMessageMemoryContext(
+    opts.groupFolder,
+    opts.messageHint,
+  );
   if (messageMemory) parts.push(messageMemory);
 
   return `[System: ${parts.join('. ')}.]`;
@@ -664,10 +730,15 @@ export function buildAgentContext(opts: {
   source?: 'web' | 'whatsapp';
   messageHint?: string;
   groupFolder?: string;
+  chatJid?: string;
 }): string {
   const config = getGroupConfig();
   const groupFolder = opts.groupFolder ?? config.group_folder;
-  const sysAppend = buildSystemAppend({ sessionId: opts.sessionId, groupFolder });
+  const sysAppend = buildSystemAppend({
+    sessionId: opts.sessionId,
+    groupFolder,
+    chatJid: opts.chatJid,
+  });
   const prefix = buildPerMessagePrefix({
     sessionId: opts.sessionId,
     source: opts.source,
@@ -736,7 +807,10 @@ function buildSystemMemoryContext(groupDir: string): string {
  * Build memory context for per-message prefix — relevant/recent memories only.
  * Tied to what the user just said, so stays in the message transcript.
  */
-function buildMessageMemoryContext(groupFolder: string, messageHint?: string): string {
+function buildMessageMemoryContext(
+  groupFolder: string,
+  messageHint?: string,
+): string {
   try {
     if (messageHint && messageHint.length > 5) {
       const relevant = searchMemories({

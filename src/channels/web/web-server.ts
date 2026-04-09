@@ -57,6 +57,12 @@ import {
   getGroupDir as getGroupDirPath,
 } from './group-config.js';
 import { buildPerMessagePrefix, getCurrentMood } from './context-builder.js';
+import {
+  regenerateEmotionalStateAsync,
+  shouldRegenerate as shouldRegenerateEmotionalState,
+  noteMessage as noteEmotionalStateMessage,
+  RecentMessage,
+} from './emotional-state.js';
 
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
@@ -842,6 +848,41 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           session_id: sessionId,
           mood: tagMood,
         });
+
+        // Fire-and-forget emotional state regeneration.
+        // Reads recent messages from the DB and asks Haiku to capture the
+        // emotional undercurrent beneath Seyoung's moment-to-moment mood.
+        // Throttled: every 3rd response, or after 30min gap, or on mood shift.
+        try {
+          const groupFolder = getGroupFolder();
+          noteEmotionalStateMessage(groupFolder);
+
+          // moodShifted: did the mood-style cache also regen this turn?
+          // We don't have a direct signal, so use a heuristic: if applyMoodTag
+          // returned a different primary than the last cached mood, treat as shifted.
+          const moodShifted = false; // conservative — let the throttle handle most cases
+
+          if (shouldRegenerateEmotionalState(groupFolder, moodShifted)) {
+            // Fetch the last 10 messages from the chat (mix of user + bot)
+            // getChatMessages returns oldest-first (ASC after DESC subquery)
+            const chatMessages = getChatMessages(pipelineJid, 10, sessionId).map(
+              (m): RecentMessage => ({
+                sender_name: m.sender_name || (m.is_bot_message ? 'Seyoung' : 'Michael'),
+                content: m.content || '',
+                is_bot_message: m.is_bot_message === 1,
+              }),
+            );
+
+            regenerateEmotionalStateAsync(
+              groupFolder,
+              chatMessages,
+              tagMood,
+              moodNow.energy,
+            );
+          }
+        } catch (err) {
+          logger.error({ err }, 'Failed to schedule emotional state regen');
+        }
 
         // Auto-name session after first bot response
         const botCount = getBotMessageCount(pipelineJid, sessionId);

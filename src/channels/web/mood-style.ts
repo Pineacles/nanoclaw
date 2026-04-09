@@ -34,12 +34,18 @@ function cachePath(groupFolder: string): string {
 /**
  * Read the cached mood style summary for a group, or null if missing/corrupt.
  */
-export function getCachedMoodStyle(groupFolder: string): CachedMoodStyle | null {
+export function getCachedMoodStyle(
+  groupFolder: string,
+): CachedMoodStyle | null {
   const p = cachePath(groupFolder);
   try {
     if (!fs.existsSync(p)) return null;
     const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
-    if (typeof raw?.summary === 'string' && raw.distribution && typeof raw.energy === 'number') {
+    if (
+      typeof raw?.summary === 'string' &&
+      raw.distribution &&
+      typeof raw.energy === 'number'
+    ) {
       return raw as CachedMoodStyle;
     }
   } catch {
@@ -155,7 +161,10 @@ export function regenerateMoodStyleAsync(
         proc.stdin.end();
       });
 
-      const summary = stdout.trim().replace(/^["']|["']$/g, '').trim();
+      const summary = stdout
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .trim();
       if (!summary || summary.length > 500) {
         logger.warn(
           { groupFolder, length: summary.length },
@@ -175,7 +184,10 @@ export function regenerateMoodStyleAsync(
       fs.writeFileSync(p, JSON.stringify(cached, null, 2), 'utf-8');
       logger.info({ groupFolder, summary }, 'Mood style summary regenerated');
     } catch (err) {
-      logger.error({ err, groupFolder }, 'Failed to regenerate mood style summary');
+      logger.error(
+        { err, groupFolder },
+        'Failed to regenerate mood style summary',
+      );
     }
   })();
 }

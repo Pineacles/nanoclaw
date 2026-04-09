@@ -3,7 +3,11 @@ import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
 import { countRecentMessages } from '../../db.js';
 import { getGroupFolder, getGroupJid, getTimezone } from './group-config.js';
-import { regenerateMoodStyleAsync, shouldRegenerate, MoodBehavior } from './mood-style.js';
+import {
+  regenerateMoodStyleAsync,
+  shouldRegenerate,
+  MoodBehavior,
+} from './mood-style.js';
 const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 /* ── Activity Interrupt ── */

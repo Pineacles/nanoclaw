@@ -484,6 +484,30 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+/**
+ * Return the mood column from the last N bot messages in this chat,
+ * ordered oldest → newest. Used for stuck-pattern detection in the
+ * per-message context. Skips messages with no mood set.
+ */
+export function getRecentMoods(
+  chatJid: string,
+  limit: number = 8,
+): string[] {
+  const sql = `
+    SELECT mood FROM (
+      SELECT mood, timestamp FROM messages
+      WHERE chat_jid = ? AND is_bot_message = 1
+        AND mood IS NOT NULL AND mood != ''
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+  const rows = db
+    .prepare(sql)
+    .all(chatJid, limit) as { mood: string }[];
+  return rows.map((r) => r.mood);
+}
+
 /** Count non-bot messages in a chat since a given timestamp */
 export function countRecentMessages(
   chatJid: string,

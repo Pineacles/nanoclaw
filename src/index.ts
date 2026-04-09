@@ -488,9 +488,13 @@ async function runAgent(
         systemInstruction = buildSystemAppend({
           sessionId: sessionId || 'default',
           groupFolder: group.folder,
+          chatJid,
         });
       } catch (err) {
-        logger.warn({ err, group: group.name }, 'Failed to build systemAppend, continuing without it');
+        logger.warn(
+          { err, group: group.name },
+          'Failed to build systemAppend, continuing without it',
+        );
       }
     }
 
