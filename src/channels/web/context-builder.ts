@@ -12,6 +12,73 @@ import { resolveMood } from './mood.js';
 import { loadContextFiles } from './context-loader.js';
 import { buildWorkflowSummary } from './workflow-loader.js';
 import { getRecentMemories, searchMemories } from '../../memory-db.js';
+import { getCachedMoodStyle } from './mood-style.js';
+
+/* ── Workspace File Index ── */
+
+const FILE_ANNOTATIONS: Record<string, string> = {
+  'credentials.md': 'All API keys for websites and services',
+  'USER.md': "Michael's profile — read every conversation",
+  'finance.md': 'Money, budgets, investments, stocks',
+  'diet.md': 'Food, nutrition, calories, macros',
+  'fitness.md': 'Exercise, workouts, weight, body',
+  'psychology.md': 'Mental health, mood, habits, goals',
+  'nutri_api.md': 'NutriPilot API reference',
+};
+
+let fileIndexCache: { data: string; time: number } = { data: '', time: 0 };
+const FILE_INDEX_CACHE_TTL = 60_000;
+
+function buildFileIndex(): string {
+  const now = Date.now();
+  if (fileIndexCache.time && now - fileIndexCache.time < FILE_INDEX_CACHE_TTL) {
+    return fileIndexCache.data;
+  }
+
+  const groupDir = getGroupDir();
+  const lines: string[] = [];
+
+  // Root .md files
+  try {
+    const mdFiles = fs
+      .readdirSync(groupDir)
+      .filter((f) => f.endsWith('.md'))
+      .sort();
+    for (const f of mdFiles) {
+      if (f === 'CLAUDE.md') continue; // already loaded as system prompt
+      const annotation = FILE_ANNOTATIONS[f] || '';
+      lines.push(`  ${f}${annotation ? ` — ${annotation}` : ''}`);
+    }
+  } catch { /* ignore */ }
+
+  // Context files
+  try {
+    const ctxDir = path.join(groupDir, 'context');
+    if (fs.existsSync(ctxDir)) {
+      const ctxFiles = fs.readdirSync(ctxDir).filter((f) => f.endsWith('.md')).sort();
+      for (const f of ctxFiles) {
+        lines.push(`  context/${f}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Workflow files
+  try {
+    const wfDir = path.join(groupDir, 'workflows');
+    if (fs.existsSync(wfDir)) {
+      const wfFiles = fs.readdirSync(wfDir).filter((f) => f.endsWith('.md')).sort();
+      for (const f of wfFiles) {
+        lines.push(`  workflows/${f}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  const result = lines.length > 0
+    ? `Workspace files (/workspace/group/):\n${lines.join('\n')}`
+    : '';
+  fileIndexCache = { data: result, time: now };
+  return result;
+}
 
 /* ── Michael's Schedule ── */
 
@@ -385,157 +452,6 @@ export function deleteSessionContext(sessionId: string): void {
   }
 }
 
-/**
- * Build the full system context string for a message.
- * @param messageHint — first ~200 chars of the user's message, used for relevance-based memory retrieval
- */
-export function buildAgentContext(opts: {
-  sessionId: string;
-  source?: 'web' | 'whatsapp';
-  messageHint?: string;
-}): string {
-  const config = getGroupConfig();
-  const tz = config.timezone;
-
-  // Current time
-  const zurichTime = new Date().toLocaleString('en-GB', {
-    timeZone: tz,
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  });
-
-  // Mood — with emotion distribution blending
-  const mood = resolveMood();
-  const assistantName = config.assistant.name;
-  const behaviors = loadMoodBehaviors();
-
-  // Build blended mood line from distribution or single mood
-  const dist =
-    mood.distribution && Object.keys(mood.distribution).length > 1
-      ? mood.distribution
-      : { [mood.current_mood]: 100 };
-
-  // Sort by weight descending, take top 3
-  const sorted = Object.entries(dist)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-
-  // Build the full mood blend block with complete behavioral rules
-  const moodLines: string[] = [
-    `Seyoung's mood blend — Energy: ${mood.energy}/10${mood.activity ? ` — Activity: ${mood.activity}` : ''}`,
-  ];
-  for (const [name, weight] of sorted) {
-    const b = behaviors[name];
-    if (b) {
-      moodLines.push(
-        `  ${weight}% ${name}: ${b.rules}${b.tone ? ` Examples: ${b.tone}` : ''}`,
-      );
-    } else {
-      moodLines.push(`  ${weight}% ${name}`);
-    }
-  }
-  // Add explicit blending instruction so the model actually applies the weights
-  const primaryWeight = sorted[0][1];
-  const primaryName = sorted[0][0];
-  if (sorted.length > 1 && primaryWeight < 80) {
-    const secondary = sorted[1];
-    moodLines.push(
-      `BLENDING: Your dominant voice is ${primaryName} (${primaryWeight}%), but ${secondary[0]} (${secondary[1]}%) should visibly color your tone — it's not background noise, it actively shapes word choice, sentence length, and emotional openness. ${sorted.length > 2 ? `${sorted[2][0]} (${sorted[2][1]}%) adds occasional texture.` : ''} The blend should feel natural, not mechanical.`,
-    );
-  }
-  const moodLine = moodLines.join('\n');
-
-  // Personality constraint — derived from personality.json + current mood blend
-  const personalityProfile = loadPersonalityProfile();
-  const personalityData = loadPersonalityData();
-  let constraintLine = '';
-  if (personalityData) {
-    const constraints: string[] = [];
-    if (personalityData.extroversion.score < 0.35)
-      constraints.push('low extroversion — keep casual responses concise');
-    if (personalityData.neuroticism.score > 0.6)
-      constraints.push('high neuroticism — emotional reactions are genuine');
-    if (personalityData.agreeableness.score < 0.4)
-      constraints.push("low agreeableness — don't perform warmth");
-    if (personalityData.openness.score > 0.7)
-      constraints.push('high openness — follow curiosity naturally');
-    const primaryMood = sorted[0][0];
-    const primaryWeight = sorted[0][1];
-    if (primaryWeight < 60)
-      constraints.push(
-        `mixed mood — blend writing styles, don't commit to one tone`,
-      );
-    if (primaryMood === 'sleeping' && primaryWeight > 50)
-      constraints.push('mostly asleep — ultra-short responses');
-    if (constraints.length > 0)
-      constraintLine = `Seyoung's personality constraint: ${constraints.join('; ')}`;
-  }
-
-  // Per-session context
-  const sessionCtx = getSessionContext(opts.sessionId);
-
-  // Memory context (diary + relevant memories + conversation summary)
-  const memoryContext = buildMemoryContext(
-    config.group_folder,
-    opts.messageHint,
-  );
-
-  // User-defined context files
-  const contextFiles = loadContextFiles();
-
-  // Assemble
-  const parts: string[] = [`Current time is ${zurichTime}`, moodLine];
-
-  if (personalityProfile) parts.push(personalityProfile);
-  if (constraintLine) parts.push(constraintLine);
-
-  // Emotional undercurrent
-  const emotional = loadEmotionalState();
-  if (emotional) parts.push(emotional);
-
-  // Relationship dynamics
-  const relationship = loadRelationshipState();
-  if (relationship) parts.push(relationship);
-
-  // Michael's schedule
-  const michaelSchedule = loadMichaelSchedule();
-  if (michaelSchedule) parts.push(michaelSchedule);
-
-  // Session-specific context injection
-  if (sessionCtx.context) {
-    parts.push(`Session context: ${sessionCtx.context}`);
-  }
-
-  if (contextFiles) {
-    parts.push(contextFiles);
-  }
-
-  // Workflow summaries
-  const workflowSummary = buildWorkflowSummary(opts.sessionId);
-  if (workflowSummary) {
-    parts.push(workflowSummary);
-  }
-
-  if (opts.source === 'whatsapp') {
-    parts.push('Source: WhatsApp');
-  } else {
-    parts.push(
-      `Chat session: ${opts.sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions`,
-    );
-  }
-
-  if (memoryContext) {
-    parts.push(memoryContext);
-  }
-
-  return `[System: ${parts.join('. ')}.]`;
-}
-
 /** Return the mood data for external use (e.g. storing with message) */
 export function getCurrentMood(): {
   current_mood: string;
@@ -560,14 +476,216 @@ function loadPersonalityData(): PersonalityProfile | null {
 }
 
 /**
- * Build memory context — diary + conversation summary + relevant/recent memories.
+ * Build a single compact mood line for the per-message prefix.
+ * Lists ALL moods sorted by weight descending (no top-N truncation).
+ * Appends the cached Haiku writing-style summary when available and still valid.
  */
-function buildMemoryContext(groupFolder: string, messageHint?: string): string {
+function buildMoodLine(groupFolder: string): string {
+  const mood = resolveMood();
+  const dist =
+    mood.distribution && Object.keys(mood.distribution).length > 1
+      ? mood.distribution
+      : { [mood.current_mood]: 100 };
+
+  const sorted = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+  const blendParts = sorted.map(([name, weight]) => `${weight}% ${name}`);
+  const blendStr = blendParts.join(', ');
+  const energyActivity = `energy ${mood.energy}/10${mood.activity ? `, ${mood.activity}` : ''}`;
+
+  let line = `mood blend: ${blendStr} (${energyActivity})`;
+
+  // Append cached Haiku summary if distribution is still close enough
+  const cached = getCachedMoodStyle(groupFolder);
+  if (cached) {
+    const cacheValid = !shouldCacheStyleBeSkipped(dist, cached.distribution);
+    if (cacheValid && cached.summary) {
+      line += ` — writing style: ${cached.summary}`;
+    }
+  }
+
+  return line;
+}
+
+/**
+ * Returns true if the cached distribution is stale relative to the current one.
+ * "Stale" means: different mood set, or any weight shifted by >= 10pt.
+ */
+function shouldCacheStyleBeSkipped(
+  currentDist: Record<string, number>,
+  cachedDist: Record<string, number>,
+): boolean {
+  const currentKeys = Object.keys(currentDist);
+  const cachedKeys = Object.keys(cachedDist);
+  if (currentKeys.length !== cachedKeys.length) return true;
+  for (const k of currentKeys) {
+    if (!(k in cachedDist)) return true;
+    const diff = Math.abs((currentDist[k] || 0) - (cachedDist[k] || 0));
+    if (diff >= 10) return true;
+  }
+  return false;
+}
+
+/**
+ * Build the system-append block — heavy/slow-changing state.
+ * Goes into systemPrompt.append via ContainerInput.systemInstruction.
+ * Never stored in the conversation transcript.
+ */
+export function buildSystemAppend(opts: {
+  sessionId: string;
+  groupFolder: string;
+}): string {
+  const groupDir = getGroupDir();
+  const sections: string[] = [];
+
+  // Personality profile
+  const personalityProfile = loadPersonalityProfile();
+  if (personalityProfile) {
+    sections.push(personalityProfile);
+  }
+
+  // Personality constraint
+  const personalityData = loadPersonalityData();
+  if (personalityData) {
+    const mood = resolveMood();
+    const dist =
+      mood.distribution && Object.keys(mood.distribution).length > 1
+        ? mood.distribution
+        : { [mood.current_mood]: 100 };
+    const sorted = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+    const constraints: string[] = [];
+    if (personalityData.extroversion.score < 0.35)
+      constraints.push('low extroversion — keep casual responses concise');
+    if (personalityData.neuroticism.score > 0.6)
+      constraints.push('high neuroticism — emotional reactions are genuine');
+    if (personalityData.agreeableness.score < 0.4)
+      constraints.push("low agreeableness — don't perform warmth");
+    if (personalityData.openness.score > 0.7)
+      constraints.push('high openness — follow curiosity naturally');
+    const primaryWeight = sorted[0][1];
+    const primaryMood = sorted[0][0];
+    if (primaryWeight < 60)
+      constraints.push(`mixed mood — blend writing styles, don't commit to one tone`);
+    if (primaryMood === 'sleeping' && primaryWeight > 50)
+      constraints.push('mostly asleep — ultra-short responses');
+    if (constraints.length > 0)
+      sections.push(`Seyoung's personality constraint: ${constraints.join('; ')}`);
+  }
+
+  // Relationship state
+  const relationship = loadRelationshipState();
+  if (relationship) sections.push(relationship);
+
+  // Michael's schedule
+  const michaelSchedule = loadMichaelSchedule();
+  if (michaelSchedule) sections.push(michaelSchedule);
+
+  // Diary + conversation summary
+  const systemMemory = buildSystemMemoryContext(groupDir);
+  if (systemMemory) sections.push(systemMemory);
+
+  // Workflow summary
+  const workflowSummary = buildWorkflowSummary(opts.sessionId);
+  if (workflowSummary) sections.push(workflowSummary);
+
+  // User-defined context files
+  const contextFiles = loadContextFiles();
+  if (contextFiles) sections.push(contextFiles);
+
+  // Workspace file index
+  const fileIndex = buildFileIndex();
+  if (fileIndex) sections.push(fileIndex);
+
+  return sections.join('\n\n');
+}
+
+/**
+ * Build the per-message prefix — light/fast-changing state.
+ * Prepended to the user message content and stored in the DB transcript.
+ * ~10x smaller than the old buildAgentContext block.
+ */
+export function buildPerMessagePrefix(opts: {
+  sessionId: string;
+  source?: 'web' | 'whatsapp';
+  messageHint?: string;
+  groupFolder: string;
+}): string {
+  const config = getGroupConfig();
+  const tz = config.timezone;
+
+  // Current time
+  const zurichTime = new Date().toLocaleString('en-GB', {
+    timeZone: tz,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+
+  const parts: string[] = [`Current time is ${zurichTime}`];
+
+  // Compact mood line (unlimited blending, with cached Haiku summary if available)
+  parts.push(buildMoodLine(opts.groupFolder));
+
+  // Emotional undercurrent
+  const emotional = loadEmotionalState();
+  if (emotional) parts.push(emotional);
+
+  // Per-session context
+  const sessionCtx = getSessionContext(opts.sessionId);
+  if (sessionCtx.context) {
+    parts.push(`Session context: ${sessionCtx.context}`);
+  }
+
+  // Source / session identifier
+  if (opts.source === 'whatsapp') {
+    parts.push('Source: WhatsApp');
+  } else {
+    parts.push(
+      `Chat session: ${opts.sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions`,
+    );
+  }
+
+  // Relevant memories (tied to what the user just said — stays per-message)
+  const messageMemory = buildMessageMemoryContext(opts.groupFolder, opts.messageHint);
+  if (messageMemory) parts.push(messageMemory);
+
+  return `[System: ${parts.join('. ')}.]`;
+}
+
+/**
+ * Legacy wrapper — keeps existing callers (api-routes.ts context-preview) working.
+ * Returns the combined system-append + per-message prefix for preview purposes.
+ */
+export function buildAgentContext(opts: {
+  sessionId: string;
+  source?: 'web' | 'whatsapp';
+  messageHint?: string;
+  groupFolder?: string;
+}): string {
+  const config = getGroupConfig();
+  const groupFolder = opts.groupFolder ?? config.group_folder;
+  const sysAppend = buildSystemAppend({ sessionId: opts.sessionId, groupFolder });
+  const prefix = buildPerMessagePrefix({
+    sessionId: opts.sessionId,
+    source: opts.source,
+    messageHint: opts.messageHint,
+    groupFolder,
+  });
+  return `${sysAppend}\n\n${prefix}`;
+}
+
+/**
+ * Build memory context for systemAppend — diary entry + conversation summary only.
+ */
+function buildSystemMemoryContext(groupDir: string): string {
   const parts: string[] = [];
 
   // Latest diary entry (600 chars for deeper continuity)
   try {
-    const diaryDir = path.join(getGroupDir(), 'diary');
+    const diaryDir = path.join(groupDir, 'diary');
     if (fs.existsSync(diaryDir)) {
       const entries = fs
         .readdirSync(diaryDir)
@@ -589,7 +707,7 @@ function buildMemoryContext(groupFolder: string, messageHint?: string): string {
 
   // Latest conversation summary (400 chars)
   try {
-    const convDir = path.join(getGroupDir(), 'conversations');
+    const convDir = path.join(groupDir, 'conversations');
     if (fs.existsSync(convDir)) {
       const summaries = fs
         .readdirSync(convDir)
@@ -611,10 +729,16 @@ function buildMemoryContext(groupFolder: string, messageHint?: string): string {
     // Conversations not available
   }
 
-  // Relevance-based memory retrieval (if message hint available) or recent fallback
+  return parts.join('\n');
+}
+
+/**
+ * Build memory context for per-message prefix — relevant/recent memories only.
+ * Tied to what the user just said, so stays in the message transcript.
+ */
+function buildMessageMemoryContext(groupFolder: string, messageHint?: string): string {
   try {
     if (messageHint && messageHint.length > 5) {
-      // Search for memories relevant to what the user is saying
       const relevant = searchMemories({
         group_folder: groupFolder,
         query: messageHint.slice(0, 200),
@@ -624,22 +748,20 @@ function buildMemoryContext(groupFolder: string, messageHint?: string): string {
         const memLines = relevant
           .slice(0, 5)
           .map((m) => `  - [${m.category}] ${m.content.slice(0, 100)}`);
-        parts.push(`Relevant memories:\n${memLines.join('\n')}`);
+        return `Relevant memories:\n${memLines.join('\n')}`;
       }
     } else {
-      // Fallback: recent memories by importance
       const recent = getRecentMemories({ group_folder: groupFolder, limit: 5 });
       if (recent.length > 0) {
         const memLines = recent
           .sort((a, b) => b.importance - a.importance)
           .slice(0, 5)
           .map((m) => `  - [${m.category}] ${m.content.slice(0, 100)}`);
-        parts.push(`Recent memories:\n${memLines.join('\n')}`);
+        return `Recent memories:\n${memLines.join('\n')}`;
       }
     }
   } catch {
     // Memory DB not available
   }
-
-  return parts.length > 0 ? parts.join('\n') : '';
+  return '';
 }

@@ -3,6 +3,7 @@ import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
 import { countRecentMessages } from '../../db.js';
 import { getGroupFolder, getGroupJid, getTimezone } from './group-config.js';
+import { regenerateMoodStyleAsync, shouldRegenerate, MoodBehavior } from './mood-style.js';
 const OVERRIDE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 /* ── Activity Interrupt ── */
@@ -315,6 +316,31 @@ export function stripMoodTags(text: string): string {
     .trim();
 }
 
+function loadMoodBehaviorsForRegen(): Record<string, MoodBehavior> | null {
+  try {
+    const p = path.join(GROUPS_DIR, getGroupFolder(), 'mood_behaviors.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function maybeRegenerateMoodStyle(
+  oldDist: Record<string, number> | undefined,
+  newDist: Record<string, number>,
+  energy: number,
+): void {
+  if (!shouldRegenerate(oldDist, newDist)) return;
+  const behaviors = loadMoodBehaviorsForRegen();
+  if (!behaviors) return;
+  try {
+    regenerateMoodStyleAsync(getGroupFolder(), newDist, energy, behaviors);
+  } catch {
+    /* fire-and-forget — never throw */
+  }
+}
+
 /**
  * Parse mood tags from bot text. Supports:
  *   *[mood:chill:40,focused:30,hungry:30:6]* (distribution, preferred)
@@ -326,6 +352,10 @@ export function applyMoodTag(text: string): {
   cleanText: string;
   mood: string;
 } {
+  // Capture existing distribution before any mutation so we can detect changes.
+  const existingData = readMoodFile();
+  const oldDist = existingData.distribution;
+
   // Try distribution format first (new, preferred)
   const distMatch = text.match(MOOD_TAG_DIST);
   if (distMatch) {
@@ -337,12 +367,13 @@ export function applyMoodTag(text: string): {
     if (dist) {
       // Primary mood = highest weight
       const primary = Object.entries(dist).sort((a, b) => b[1] - a[1])[0][0];
-      const data = readMoodFile();
+      const data = existingData;
       data.current_mood = primary;
       data.energy = newEnergy;
       data.distribution = dist;
       data.updated_at = new Date().toISOString();
       writeMoodFile(data);
+      maybeRegenerateMoodStyle(oldDist, data.distribution!, data.energy);
       return { cleanText, mood: primary };
     }
   }
@@ -354,12 +385,13 @@ export function applyMoodTag(text: string): {
     const newEnergy = parseInt(simpleMatch[2], 10);
     const cleanText = stripMoodTags(text);
 
-    const data = readMoodFile();
+    const data = existingData;
     data.current_mood = newMood;
     data.energy = newEnergy;
     data.distribution = { [newMood]: 100 };
     data.updated_at = new Date().toISOString();
     writeMoodFile(data);
+    maybeRegenerateMoodStyle(oldDist, data.distribution!, data.energy);
 
     return { cleanText, mood: newMood };
   }
@@ -371,12 +403,13 @@ export function applyMoodTag(text: string): {
     const newEnergy = oldMatch[2] ? parseInt(oldMatch[2], 10) : undefined;
     const cleanText = stripMoodTags(text);
 
-    const data = readMoodFile();
+    const data = existingData;
     data.current_mood = newMood;
     if (newEnergy !== undefined) data.energy = newEnergy;
     data.distribution = { [newMood]: 100 };
     data.updated_at = new Date().toISOString();
     writeMoodFile(data);
+    maybeRegenerateMoodStyle(oldDist, data.distribution!, data.energy);
 
     return { cleanText, mood: newMood };
   }

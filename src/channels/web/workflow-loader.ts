@@ -214,5 +214,6 @@ export function buildWorkflowSummary(sessionId?: string): string {
     return `  - ${w.name}: ${w.description}${triggers} (file: workflows/${w.filename})`;
   });
 
-  return `Available workflows (read the full file in /workspace/group/workflows/ when executing):\n${lines.join('\n')}`;
+  const directive = `WORKFLOW PRIORITY — Before you run any command, tool call, or multi-step procedure, scan this list first. If a workflow matches what you're about to do, you MUST read the file with Read on /workspace/group/workflows/<filename> and follow it exactly. Do not improvise commands when a workflow exists — workflows are how Michael told you to do these things. Only fall through to your own approach if NO workflow matches.`;
+  return `${directive}\n\nAvailable workflows:\n${lines.join('\n')}`;
 }

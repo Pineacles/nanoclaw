@@ -71,6 +71,7 @@ import {
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { stripMoodTags } from './channels/web/mood.js';
+import { buildSystemAppend } from './channels/web/context-builder.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -479,6 +480,20 @@ async function runAgent(
     const webSession = getWebSessionById(sessionId || 'default');
     const isPlainMode = webSession?.mode === 'plain';
 
+    // Compute systemAppend for the web channel (heavy persona/state context),
+    // unless this is a plain-mode session which skips identity entirely.
+    let systemInstruction: string | undefined;
+    if (channel?.name === 'web' && !isPlainMode) {
+      try {
+        systemInstruction = buildSystemAppend({
+          sessionId: sessionId || 'default',
+          groupFolder: group.folder,
+        });
+      } catch (err) {
+        logger.warn({ err, group: group.name }, 'Failed to build systemAppend, continuing without it');
+      }
+    }
+
     const output = await runContainerAgent(
       group,
       {
@@ -489,6 +504,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         skipIdentity: isPlainMode,
+        systemInstruction,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

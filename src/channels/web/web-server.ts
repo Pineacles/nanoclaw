@@ -56,7 +56,7 @@ import {
   getUserSenderId,
   getGroupDir as getGroupDirPath,
 } from './group-config.js';
-import { buildAgentContext, getCurrentMood } from './context-builder.js';
+import { buildPerMessagePrefix, getCurrentMood } from './context-builder.js';
 
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
@@ -677,14 +677,15 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
           // Build context from group config, mood, memory, and context/*.md files
           const mood = getCurrentMood();
-          const agentContext = buildAgentContext({
+          const perMessagePrefix = buildPerMessagePrefix({
             sessionId,
             source: 'web',
             messageHint: content.slice(0, 200),
+            groupFolder: getGroupFolder(),
           });
           const agentContent = isPlainSession
             ? `[System: Current time is ${new Date().toLocaleString('en-GB', { timeZone: getTimezone(), weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}. Chat session: ${sessionId}.]\n${content}`
-            : `${agentContext}\n${content}`;
+            : `${perMessagePrefix}\n${content}`;
 
           // Touch session updated_at
           touchWebSession(sessionId);
@@ -932,12 +933,13 @@ export function createWebServer(opts: WebServerOpts): WebServer {
 
       // Build context from group config, mood, memory, and context/*.md files
       const mood = getCurrentMood();
-      const agentContext = buildAgentContext({
+      const perMessagePrefix = buildPerMessagePrefix({
         sessionId,
         source: 'whatsapp',
         messageHint: fullContent.slice(0, 200),
+        groupFolder: getGroupFolder(),
       });
-      const agentContent = `${agentContext}\n${fullContent}`;
+      const agentContent = `${perMessagePrefix}\n${fullContent}`;
 
       touchWebSession(sessionId);
 
