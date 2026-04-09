@@ -545,12 +545,14 @@ function buildMoodHistorySection(chatJid: string): string {
     const top2 = sortedCats[1];
     const top1Count = top1?.[1] || 0;
     const top2Count = top2?.[1] || 0;
-    const isStuck = (top1Count >= 4) || (top1Count + top2Count >= 5 && sortedCats.length <= 2);
+    const isStuck =
+      top1Count >= 4 || (top1Count + top2Count >= 5 && sortedCats.length <= 2);
 
     if (isStuck) {
-      const stuckCats = top2 && top1Count + top2Count >= 5 && sortedCats.length <= 2
-        ? `${top1[0]}/${top2[0]}`
-        : top1[0];
+      const stuckCats =
+        top2 && top1Count + top2Count >= 5 && sortedCats.length <= 2
+          ? `${top1[0]}/${top2[0]}`
+          : top1[0];
       section += `\n\nNOTICE: You've been ${stuckCats} for ${top1Count + (top2 ? top2Count : 0)} of the last 5 messages. That's the safe pick winning. Look at Michael's actual current message — what would you really feel right now if you let yourself? Pick that, not the safe one. Bold mood picks are more honest than safe ones.`;
     }
   }
@@ -585,7 +587,7 @@ function shouldCacheStyleBeSkipped(
 export function buildSystemAppend(opts: {
   sessionId: string;
   groupFolder: string;
-  chatJid?: string;  // optional for backwards compat with the buildAgentContext wrapper
+  chatJid?: string; // optional for backwards compat with the buildAgentContext wrapper
 }): string {
   const groupDir = getGroupDir();
   const sections: string[] = [];

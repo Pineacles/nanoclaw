@@ -865,9 +865,14 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           if (shouldRegenerateEmotionalState(groupFolder, moodShifted)) {
             // Fetch the last 10 messages from the chat (mix of user + bot)
             // getChatMessages returns oldest-first (ASC after DESC subquery)
-            const chatMessages = getChatMessages(pipelineJid, 10, sessionId).map(
+            const chatMessages = getChatMessages(
+              pipelineJid,
+              10,
+              sessionId,
+            ).map(
               (m): RecentMessage => ({
-                sender_name: m.sender_name || (m.is_bot_message ? 'Seyoung' : 'Michael'),
+                sender_name:
+                  m.sender_name || (m.is_bot_message ? 'Seyoung' : 'Michael'),
                 content: m.content || '',
                 is_bot_message: m.is_bot_message === 1,
               }),

@@ -5,6 +5,7 @@ import path from 'path';
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { isLazyCronTitle } from './channels/web/cron-title.js';
 import {
   NewMessage,
   RegisteredGroup,
@@ -489,10 +490,7 @@ export function getMessagesSince(
  * ordered oldest → newest. Used for stuck-pattern detection in the
  * per-message context. Skips messages with no mood set.
  */
-export function getRecentMoods(
-  chatJid: string,
-  limit: number = 8,
-): string[] {
+export function getRecentMoods(chatJid: string, limit: number = 8): string[] {
   const sql = `
     SELECT mood FROM (
       SELECT mood, timestamp FROM messages
@@ -502,9 +500,7 @@ export function getRecentMoods(
       LIMIT ?
     ) ORDER BY timestamp
   `;
-  const rows = db
-    .prepare(sql)
-    .all(chatJid, limit) as { mood: string }[];
+  const rows = db.prepare(sql).all(chatJid, limit) as { mood: string }[];
   return rows.map((r) => r.mood);
 }
 
@@ -557,6 +553,19 @@ export function createTask(
     task.created_at,
     task.title || '',
   );
+
+  // Auto-generate a title via Haiku if none was supplied
+  if (isLazyCronTitle(task.title)) {
+    // Lazy import to avoid circular dependency
+    import('./channels/web/cron-title.js')
+      .then(({ regenerateCronTitleAsync }) => {
+        regenerateCronTitleAsync(task.id, task.prompt);
+      })
+      .catch((err) => {
+        // Log but never throw — title regen must never break task creation
+        console.error('[cron-title] Failed to dispatch regen:', err);
+      });
+  }
 }
 
 export function getTaskById(id: string): ScheduledTask | undefined {

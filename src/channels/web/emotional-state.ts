@@ -56,7 +56,10 @@ function statePath(groupFolder: string): string {
  *   - 3+ messages have arrived since last run
  *   - moodShifted=true (caller knows mood-style regen also fired this turn)
  */
-export function shouldRegenerate(groupFolder: string, moodShifted: boolean): boolean {
+export function shouldRegenerate(
+  groupFolder: string,
+  moodShifted: boolean,
+): boolean {
   const now = Date.now();
   const state = regenState.get(groupFolder);
   if (!state) return true;
@@ -102,8 +105,9 @@ function buildHaikuPrompt(
   previousState: EmotionalState | null,
 ): string {
   const transcript = recentMessages
-    .map((m) =>
-      `${m.sender_name}: ${m.content.replace(/^\[System:[^\]]*\]\n?/, '').slice(0, 300)}`,
+    .map(
+      (m) =>
+        `${m.sender_name}: ${m.content.replace(/^\[System:[^\]]*\]\n?/, '').slice(0, 300)}`,
     )
     .join('\n');
 
@@ -150,10 +154,18 @@ export function regenerateEmotionalStateAsync(
   currentEnergy: number,
 ): void {
   // Mark the throttle state immediately so concurrent calls don't double-fire
-  regenState.set(groupFolder, { lastRunAt: Date.now(), messagesSinceLastRun: 0 });
+  regenState.set(groupFolder, {
+    lastRunAt: Date.now(),
+    messagesSinceLastRun: 0,
+  });
 
   const previous = readCurrentState(groupFolder);
-  const prompt = buildHaikuPrompt(recentMessages, currentMoodPrimary, currentEnergy, previous);
+  const prompt = buildHaikuPrompt(
+    recentMessages,
+    currentMoodPrimary,
+    currentEnergy,
+    previous,
+  );
 
   void (async () => {
     try {
@@ -188,7 +200,10 @@ export function regenerateEmotionalStateAsync(
         proc.stdin.end();
       });
 
-      const trimmed = stdout.trim().replace(/^```json\s*|\s*```$/g, '').trim();
+      const trimmed = stdout
+        .trim()
+        .replace(/^```json\s*|\s*```$/g, '')
+        .trim();
 
       // Empty object → don't update the file (let existing state expire naturally)
       if (trimmed === '{}' || trimmed === '') {
@@ -211,7 +226,12 @@ export function regenerateEmotionalStateAsync(
       }
 
       // Sanity check the shape
-      if (!parsed.mood || !parsed.trigger || !parsed.resolves_when || !parsed.underlying) {
+      if (
+        !parsed.mood ||
+        !parsed.trigger ||
+        !parsed.resolves_when ||
+        !parsed.underlying
+      ) {
         logger.warn(
           { groupFolder, parsed },
           'Emotional state: incomplete object, skipping write',
@@ -227,7 +247,10 @@ export function regenerateEmotionalStateAsync(
         'Emotional state regenerated',
       );
     } catch (err) {
-      logger.error({ err, groupFolder }, 'Failed to regenerate emotional state');
+      logger.error(
+        { err, groupFolder },
+        'Failed to regenerate emotional state',
+      );
     }
   })();
 }
