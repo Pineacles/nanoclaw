@@ -8,7 +8,7 @@ export interface Task {
   prompt: string;
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
-  status: 'active' | 'paused' | 'completed';
+  status: 'active' | 'paused' | 'completed' | 'draft';
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

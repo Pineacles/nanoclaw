@@ -11,6 +11,7 @@ interface ContextFile {
 interface WebSession {
   id: string;
   name: string;
+  mode?: 'persona' | 'plain';
   created_at: string;
   updated_at: string;
 }
