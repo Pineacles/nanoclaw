@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getToken, setToken } from './lib/api';
+import { api, getToken, setToken } from './lib/api';
 import { useChat } from './hooks/useChat';
 import { useMemory } from './hooks/useMemory';
 import { useTasks } from './hooks/useTasks';
@@ -32,11 +32,26 @@ export default function App() {
   }, []);
   const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [showFilesPanel, setShowFilesPanel] = useState(false);
+  const [features, setFeatures] = useState<Record<string, boolean>>({});
   const authenticated = !!getToken();
 
   const handleAuthChange = useCallback(() => {
     setAuthVersion((v) => v + 1);
   }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    api.get<{ features?: Record<string, boolean>; assistant?: { name: string } }>('/api/group-config')
+      .then(config => {
+        setFeatures(config.features || {});
+        if (config.assistant?.name) {
+          document.title = config.assistant.name;
+        }
+      })
+      .catch(() => {});
+  }, [authenticated]);
+
+  const isEnabled = (key: string) => features[key] !== false;
 
   const {
     sessions,
@@ -126,7 +141,7 @@ export default function App() {
             connected={connected}
             onSend={sendMessage}
             onDelete={deleteMessage}
-            readOnly={activeSessionId === 'whatsapp'}
+            readOnly={activeSessionId === 'whatsapp' || activeSessionId?.startsWith('whatsapp-')}
           />
         );
       case 'memory':
@@ -172,6 +187,20 @@ export default function App() {
       case 'context':
         return <ContextPage authenticated={authenticated} />;
       case 'voice':
+        if (!isEnabled('voice_call')) {
+          return (
+            <Chat
+              messages={messages}
+              isTyping={isTyping}
+              toolStatus={toolStatus}
+              isQueued={isQueued}
+              connected={connected}
+              onSend={sendMessage}
+              onDelete={deleteMessage}
+              readOnly={activeSessionId === 'whatsapp' || activeSessionId?.startsWith('whatsapp-')}
+            />
+          );
+        }
         return <VoiceCallPage />;
       case 'settings':
         return (
@@ -190,6 +219,7 @@ export default function App() {
         activeView={activeView}
         onViewChange={handleViewChange}
         mood={mood}
+        features={features}
         sessionList={
           <SessionsPanel
             sessions={sessions}
@@ -213,13 +243,15 @@ export default function App() {
               onClick={() => setMoreSheetOpen(true)}
               title="Menu"
             >
-              <div
-                className="w-3 h-3 rounded-full transition-colors duration-700 shadow-[0_0_8px_var(--mood-glow)]"
-                style={{
-                  background: moodColor,
-                  '--mood-glow': moodColor + '60',
-                } as React.CSSProperties}
-              />
+              {isEnabled('mood') && (
+                <div
+                  className="w-3 h-3 rounded-full transition-colors duration-700 shadow-[0_0_8px_var(--mood-glow)]"
+                  style={{
+                    background: moodColor,
+                    '--mood-glow': moodColor + '60',
+                  } as React.CSSProperties}
+                />
+              )}
             </button>
             {/* Desktop: brand */}
             <h1 className="hidden lg:block text-lg font-bold text-primary tracking-tight">Assistant</h1>
@@ -277,6 +309,7 @@ export default function App() {
         open={moreSheetOpen}
         onClose={() => setMoreSheetOpen(false)}
         mood={mood}
+        features={features}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={handleSessionSelect}

@@ -8,6 +8,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   mood: MoodData;
+  features: Record<string, boolean>;
   sessions: WebSession[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;
@@ -23,6 +24,7 @@ export function MoreSheet({
   open,
   onClose,
   mood,
+  features,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -48,33 +50,78 @@ export function MoreSheet({
         </div>
 
         {/* Mood section */}
-        <div className="flex items-center gap-4 px-6 py-4 border-b border-outline-variant/10 shrink-0 overflow-hidden">
-          <MoodBlob mood={mood} size="sm" collapsed />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-on-surface capitalize">{mood.current_mood || 'chill'}</p>
-            {mood.activity && (
-              <p className="text-[11px] text-on-surface-variant/70 italic truncate mt-0.5">{mood.activity}</p>
-            )}
-            {mood.energy !== undefined && (
-              <div className="flex items-center gap-2 mt-1.5">
-                <div className="flex gap-0.5">
-                  {Array.from({ length: 10 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="w-1.5 h-3 rounded-sm transition-all duration-500"
-                      style={{
-                        background: i < mood.energy
-                          ? `hsl(${20 + mood.energy * 8}, 90%, ${55 + mood.energy * 2}%)`
-                          : '#2a2522',
-                      }}
-                    />
-                  ))}
-                </div>
-                <span className="text-[10px] text-on-surface-variant font-bold">{mood.energy}/10</span>
+        {features.mood !== false && (
+          <div className="border-b border-outline-variant/10 shrink-0">
+            <div className="flex items-start gap-4 px-6 pt-4 pb-2 overflow-hidden">
+              <MoodBlob mood={mood} size="sm" collapsed />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-on-surface capitalize">{mood.current_mood || 'chill'}</p>
+                {mood.activity && (
+                  <p className="text-[11px] text-on-surface-variant/70 italic mt-0.5 line-clamp-3">{mood.activity}</p>
+                )}
+                {/* MoodBlob in collapsed mode has no labels — these are the only mood name/activity */}
+                {mood.energy !== undefined && (
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex gap-0.5">
+                      {Array.from({ length: 10 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="w-1.5 h-3 rounded-sm transition-all duration-500"
+                          style={{
+                            background: i < mood.energy
+                              ? `hsl(${20 + mood.energy * 8}, 90%, ${55 + mood.energy * 2}%)`
+                              : '#2a2522',
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-on-surface-variant font-bold">{mood.energy}/10</span>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+
+            {/* Schedule strip — shows current + upcoming slots */}
+            {mood.schedule && mood.schedule.length > 0 && (() => {
+              const now = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+              // Find current slot index (latest slot where time <= now)
+              let currentIdx = 0;
+              for (let i = 0; i < mood.schedule.length; i++) {
+                if (mood.schedule[i].time <= now) currentIdx = i;
+              }
+              // Show current + next 4 slots, wrapping around
+              const visible: Array<{ slot: typeof mood.schedule[0]; isCurrent: boolean }> = [];
+              for (let offset = 0; offset < 5 && offset < mood.schedule.length; offset++) {
+                const idx = (currentIdx + offset) % mood.schedule.length;
+                visible.push({ slot: mood.schedule[idx], isCurrent: offset === 0 });
+              }
+              return (
+                <div className="px-6 pb-3">
+                  <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/50 font-bold mb-1.5">Schedule</p>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {visible.map(({ slot, isCurrent }, i) => (
+                      <div
+                        key={i}
+                        className={`shrink-0 rounded-lg px-2.5 py-1.5 min-w-[68px] ${
+                          isCurrent
+                            ? 'bg-primary/15 border border-primary/40'
+                            : 'bg-surface-container-high border border-transparent'
+                        }`}
+                      >
+                        <p className={`text-[10px] font-bold ${isCurrent ? 'text-primary' : 'text-on-surface-variant/70'}`}>
+                          {slot.time}
+                        </p>
+                        <p className={`text-[11px] capitalize mt-0.5 ${isCurrent ? 'text-on-surface font-semibold' : 'text-on-surface-variant'}`}>
+                          {slot.mood}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
-        </div>
+        )}
 
         {/* Quick links */}
         <div className="grid grid-cols-5 gap-1.5 px-4 py-4 border-b border-outline-variant/10 shrink-0">
@@ -111,13 +158,15 @@ export function MoreSheet({
             <span className="material-symbols-outlined text-primary text-[22px]">draft</span>
             <span className="text-[11px] text-on-surface-variant font-medium">Context</span>
           </button>
-          <button
-            onClick={() => { onNavigate('voice'); onClose(); }}
-            className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-surface-container-high active:scale-95 transition-transform"
-          >
-            <span className="material-symbols-outlined text-primary text-[22px]" style={{ fontVariationSettings: "'FILL' 1" }}>call</span>
-            <span className="text-[11px] text-on-surface-variant font-medium">Voice</span>
-          </button>
+          {features.voice_call !== false && (
+            <button
+              onClick={() => { onNavigate('voice'); onClose(); }}
+              className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-surface-container-high active:scale-95 transition-transform"
+            >
+              <span className="material-symbols-outlined text-primary text-[22px]" style={{ fontVariationSettings: "'FILL' 1" }}>call</span>
+              <span className="text-[11px] text-on-surface-variant font-medium">Voice</span>
+            </button>
+          )}
         </div>
 
         {/* Sessions */}

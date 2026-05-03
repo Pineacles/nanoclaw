@@ -11,14 +11,53 @@ interface Props {
   onAuthChange: () => void;
 }
 
+const FEATURE_TOGGLES: { key: string; label: string; desc: string }[] = [
+  { key: 'memory', label: 'Memory', desc: 'Save and recall memories from conversations' },
+  { key: 'diary', label: 'Diary', desc: 'Nightly diary entries and weekly reflections' },
+  { key: 'mood', label: 'Mood System', desc: 'Mood tags, schedule, behaviors, and style' },
+  { key: 'emotional_state', label: 'Emotional State', desc: 'Auto-generated emotional undercurrent' },
+  { key: 'schedule', label: 'Schedule', desc: "User's daily schedule in context" },
+  { key: 'personality', label: 'Personality', desc: 'Big Five personality profile and constraints' },
+  { key: 'relationship', label: 'Relationship', desc: 'Emotional temperature and dynamics tracking' },
+  { key: 'voice_call', label: 'Voice Call', desc: 'Voice calling with the AI assistant' },
+];
+
 export function SettingsPage({ authenticated, onAuthChange }: Props) {
   const [tokenInput, setTokenInput] = useState(getToken());
   const [settings, setSettings] = useState<Settings>({});
+  const [features, setFeatures] = useState<Record<string, boolean>>({});
+  const [featureHealth, setFeatureHealth] = useState<Record<string, { enabled: boolean; healthy: boolean; missing_tasks?: string[] }>>({});
+  const [assistantName, setAssistantName] = useState('');
+  const [userName, setUserName] = useState('');
 
   useEffect(() => {
     if (!authenticated) return;
     api.get<Settings>('/api/settings').then(setSettings).catch(() => {});
   }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    api.get<{ features?: Record<string, boolean>; assistant?: { name: string }; user?: { name: string } }>('/api/group-config')
+      .then(config => {
+        setFeatures(config.features || {});
+        setAssistantName(config.assistant?.name || '');
+        setUserName(config.user?.name || '');
+      })
+      .catch(() => {});
+    api.get<Record<string, { enabled: boolean; healthy: boolean; missing_tasks?: string[] }>>('/api/feature-health')
+      .then(setFeatureHealth)
+      .catch(() => {});
+  }, [authenticated]);
+
+  const toggleFeature = useCallback(async (key: string) => {
+    const updated = { ...features, [key]: !features[key] };
+    setFeatures(updated);
+    const config = await api.get<Record<string, unknown>>('/api/group-config');
+    await api.put('/api/group-config', { ...config, features: updated });
+    api.get<Record<string, { enabled: boolean; healthy: boolean; missing_tasks?: string[] }>>('/api/feature-health')
+      .then(setFeatureHealth)
+      .catch(() => {});
+  }, [features]);
 
   const handleTokenSave = useCallback(() => {
     setToken(tokenInput.trim());
@@ -28,6 +67,15 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
   const handleSettingsSave = useCallback(async () => {
     await api.put('/api/settings', settings);
   }, [settings]);
+
+  const handleNamesSave = useCallback(async () => {
+    const config = await api.get<Record<string, unknown>>('/api/group-config');
+    await api.put('/api/group-config', {
+      ...config,
+      assistant: { ...(config.assistant as Record<string, unknown> || {}), name: assistantName, trigger: `@${assistantName}` },
+      user: { ...(config.user as Record<string, unknown> || {}), name: userName },
+    });
+  }, [assistantName, userName]);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -101,6 +149,49 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
                 "Security is the vessel that holds our shared intimacy. Keep your tokens private to maintain the sanctity of this space."
               </p>
             </div>
+          </div>
+
+          {/* Identity Card */}
+          <div className="col-span-12 bg-surface-container rounded-[1rem] p-6 sm:p-10">
+            <div className="flex items-center gap-4 mb-8">
+              <div className="p-3 bg-primary/20 rounded-full text-primary">
+                <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>badge</span>
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight">Identity</h2>
+                <p className="text-on-surface-variant text-sm">Names used throughout the system</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant ml-1">Assistant Name</label>
+                <input
+                  type="text"
+                  value={assistantName}
+                  onChange={(e) => setAssistantName(e.target.value)}
+                  placeholder="e.g. Luna, Claude, Aria..."
+                  className="w-full bg-surface-container-highest border-none rounded-xl py-3 px-5 text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-dim transition-all focus:outline-none"
+                />
+                <p className="text-xs text-on-surface-variant ml-1">The AI's display name and trigger word</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant ml-1">User Name</label>
+                <input
+                  type="text"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  placeholder="e.g. Michael, Alex..."
+                  className="w-full bg-surface-container-highest border-none rounded-xl py-3 px-5 text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-dim transition-all focus:outline-none"
+                />
+                <p className="text-xs text-on-surface-variant ml-1">Your name as referenced by the AI</p>
+              </div>
+            </div>
+            <button
+              onClick={handleNamesSave}
+              className="mt-6 signature-glow text-on-primary-fixed font-bold py-3 px-8 rounded-xl shadow-lg hover:shadow-primary/20 active:scale-[0.98] transition-all"
+            >
+              Save Names
+            </button>
           </div>
 
           {/* Model Selection */}
@@ -182,6 +273,45 @@ export function SettingsPage({ authenticated, onAuthChange }: Props) {
             >
               Save Settings
             </button>
+          </div>
+
+          {/* Feature Toggles Card */}
+          <div className="col-span-12 bg-surface-container rounded-[1rem] p-6 sm:p-10">
+            <div className="flex items-center gap-4 mb-8">
+              <div className="p-3 bg-primary/20 rounded-full text-primary">
+                <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>tune</span>
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight">Features</h2>
+                <p className="text-on-surface-variant text-sm">Toggle agent capabilities on or off</p>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {FEATURE_TOGGLES.map(f => (
+                <div key={f.key} className="flex items-center justify-between py-3 border-b border-outline-variant/10 last:border-0">
+                  <div>
+                    <div className="font-medium text-on-surface">{f.label}</div>
+                    <div className="text-sm text-on-surface-variant">{f.desc}</div>
+                    {featureHealth[f.key] && !featureHealth[f.key].healthy && features[f.key] !== false && (
+                      <span className="text-xs text-amber-400 flex items-center gap-1 mt-1" title="Missing required background tasks">
+                        <span className="material-symbols-outlined text-[16px]">warning</span>
+                        Setup needed
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => toggleFeature(f.key)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      features[f.key] !== false ? 'bg-primary' : 'bg-outline/30'
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                      features[f.key] !== false ? 'translate-x-6' : ''
+                    }`} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
