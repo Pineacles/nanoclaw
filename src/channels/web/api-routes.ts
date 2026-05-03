@@ -27,6 +27,9 @@ import {
   getGroupDir as getGroupDirConfig,
   getGroupConfig,
   reloadGroupConfig,
+  getAssistantName,
+  getUserName,
+  isFeatureEnabled,
 } from './group-config.js';
 import {
   listContextFiles,
@@ -84,11 +87,30 @@ function handleMessages(
 ): void {
   if (req.method !== 'GET') return error(res, 'Method not allowed', 405);
   const sessionId = url.searchParams.get('session_id') ?? undefined;
-  const messages = getMessages(sessionId).map((m) => ({
-    ...m,
-    // Strip system time note injected for the agent — not for the UI
-    content: m.content.replace(/^\[System: Current time is [\s\S]+\]\n/, ''),
-  }));
+  const messages = getMessages(sessionId).map((m) => {
+    // Strip system time note injected for the agent — not for the UI.
+    // Non-greedy so we stop at the first ] and don't over-match if the
+    // user message contains ]\n.
+    let content = m.content.replace(
+      /^\[System: Current time is [\s\S]+?\]\n?/,
+      '',
+    );
+    // Extract and strip auto-loaded memory context block.
+    const autoMatch = content.match(
+      /<<<auto-memory>>>\n([\s\S]*?)\n<<<end-auto-memory>>>/,
+    );
+    let auto_loaded_memories: string[] = [];
+    if (autoMatch) {
+      auto_loaded_memories = [
+        ...autoMatch[1].matchAll(/^--- (.+?) ---$/gm),
+      ].map((mm) => mm[1].trim());
+      content = content.replace(
+        /\n?<<<auto-memory>>>[\s\S]*?<<<end-auto-memory>>>\n?/,
+        '',
+      );
+    }
+    return { ...m, content, auto_loaded_memories };
+  });
   json(res, messages);
 }
 
@@ -301,6 +323,11 @@ async function handleTaskCreate(
     status: 'active' as const,
     created_at: new Date().toISOString(),
     title: autoTitle,
+    decision_mode: body.decision_mode ?? 0,
+    workflow_ref: body.workflow_ref || null,
+    reference_files: body.reference_files || null,
+    run_as: body.run_as || 'default',
+    model: body.model || null,
   };
   // Auto-compute next_run for cron/interval tasks if not provided
   if (!task.next_run && task.schedule_type !== 'once') {
@@ -635,6 +662,10 @@ export async function handleApiRoute(
 
     // Mood
     if (p === '/api/mood' && method === 'GET') {
+      if (!isFeatureEnabled('mood')) {
+        json(res, { current_mood: 'neutral', energy: 5, activity: '' });
+        return true;
+      }
       json(res, resolveMood());
       return true;
     }
@@ -824,6 +855,10 @@ export async function handleApiRoute(
 
     // Voice call transcript save
     if (p === '/api/voice/call-ended' && method === 'POST') {
+      if (!isFeatureEnabled('voice_call')) {
+        error(res, 'Voice call feature is disabled', 403);
+        return true;
+      }
       const body = JSON.parse(await readBody(req));
       const transcript = body.transcript as {
         role: string;
@@ -846,7 +881,8 @@ export async function handleApiRoute(
         '',
       ];
       for (const entry of transcript) {
-        const speaker = entry.role === 'user' ? 'Michael' : 'Seyoung';
+        const speaker =
+          entry.role === 'user' ? getUserName() : getAssistantName();
         lines.push(`**${speaker}:** ${entry.text}`);
         lines.push('');
       }
@@ -925,7 +961,90 @@ export async function handleApiRoute(
       const configPath = path.join(groupDir(), 'group.json');
       fs.writeFileSync(configPath, JSON.stringify(body, null, 2), 'utf-8');
       reloadGroupConfig();
+
+      // Handle feature toggle side effects
+      if (body.features) {
+        const tasks = getTasksForGroup(
+          body.group_folder || getGroupConfig().group_folder,
+        );
+
+        const featureKeywords: Record<string, string[]> = {
+          mood: ['mood schedule'],
+          personality: ['Big Five personality'],
+          diary: ['weekly reflection'],
+        };
+
+        for (const [feature, keywords] of Object.entries(featureKeywords)) {
+          const enabled = body.features[feature] !== false;
+          const relatedTasks = tasks.filter((t) =>
+            keywords.some((kw) => t.prompt.includes(kw)),
+          );
+
+          for (const task of relatedTasks) {
+            if (enabled && task.status === 'paused') {
+              updateTask(task.id, { status: 'active' });
+            } else if (!enabled && task.status === 'active') {
+              updateTask(task.id, { status: 'paused' });
+            }
+          }
+        }
+      }
+
       json(res, { ok: true });
+      return true;
+    }
+
+    // Feature health
+    if (p === '/api/feature-health' && method === 'GET') {
+      const config = getGroupConfig();
+      const tasks = getTasksForGroup(config.group_folder);
+
+      const featureTaskMap: Record<
+        string,
+        { keywords: string[]; required: boolean }
+      > = {
+        mood: { keywords: ['mood schedule'], required: true },
+        personality: { keywords: ['Big Five personality'], required: false }, // one-time, not always needed
+        diary: { keywords: ['weekly reflection'], required: true },
+        // emotional_state, schedule, relationship, memory don't need tasks
+      };
+
+      const health: Record<
+        string,
+        {
+          enabled: boolean;
+          healthy: boolean;
+          tasks: string[];
+          missing_tasks?: string[];
+        }
+      > = {};
+
+      for (const [feature, enabled] of Object.entries(config.features)) {
+        const mapping = featureTaskMap[feature];
+        if (!mapping) {
+          // Features without tasks are healthy if enabled
+          health[feature] = { enabled, healthy: true, tasks: [] };
+          continue;
+        }
+
+        const foundTasks = tasks.filter(
+          (t) =>
+            mapping.keywords.some((kw) => t.prompt.includes(kw)) &&
+            t.status === 'active',
+        );
+        const hasRequired = !mapping.required || foundTasks.length > 0;
+
+        health[feature] = {
+          enabled,
+          healthy: !enabled || hasRequired,
+          tasks: foundTasks.map((t) => t.title || t.id),
+          ...(enabled && !hasRequired
+            ? { missing_tasks: mapping.keywords }
+            : {}),
+        };
+      }
+
+      json(res, health);
       return true;
     }
 
