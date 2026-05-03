@@ -13,6 +13,11 @@ export interface Task {
   last_run: string | null;
   last_result: string | null;
   created_at: string;
+  run_as?: string;
+  decision_mode?: number;
+  workflow_ref?: string | null;
+  reference_files?: string | null;
+  model?: string | null;
 }
 
 export interface TestRunResult {

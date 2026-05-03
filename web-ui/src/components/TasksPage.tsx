@@ -17,7 +17,78 @@ interface Props {
   taskResults: Record<string, TestRunResult>;
 }
 
-function TaskCard({ task, isRunning, progress, onRun, onPause, onResume, onDelete, expanded, onToggle }: {
+function TaskEditForm({ task, onSave, onCancel }: {
+  task: Task;
+  onSave: (updates: Partial<Task>) => void;
+  onCancel: () => void;
+}) {
+  const [runAs, setRunAs] = useState(task.run_as || '');
+  const [decisionMode, setDecisionMode] = useState((task.decision_mode ?? 0) === 1);
+  const [workflowRef, setWorkflowRef] = useState(task.workflow_ref || '');
+  const [referenceFiles, setReferenceFiles] = useState(task.reference_files || '');
+  const [model, setModel] = useState(task.model || '');
+
+  const inputCls = "w-full h-8 bg-surface-container-highest text-on-surface text-[12px] rounded-lg px-3 border border-outline-variant/20 focus:outline-none focus:border-primary";
+  const labelCls = "text-[10px] font-bold text-on-surface-variant uppercase tracking-wider";
+
+  return (
+    <div className="space-y-3 pt-3 border-t border-outline-variant/10">
+      <div className="space-y-1">
+        <label className={labelCls}>Persona (run_as)</label>
+        <input value={runAs} onChange={(e) => setRunAs(e.target.value)} placeholder="default" className={inputCls} />
+        <p className="text-[10px] text-on-surface-variant/60">Persona name (file in personas/). Leave empty or "default" for group default.</p>
+      </div>
+      <div className="space-y-1">
+        <label className={labelCls}>Workflow</label>
+        <input value={workflowRef} onChange={(e) => setWorkflowRef(e.target.value)} placeholder="news-briefing" className={inputCls} />
+        <p className="text-[10px] text-on-surface-variant/60">Workflow basename (file in workflows/, without .md)</p>
+      </div>
+      <div className="space-y-1">
+        <label className={labelCls}>Reference files</label>
+        <input value={referenceFiles} onChange={(e) => setReferenceFiles(e.target.value)} placeholder="credentials.md,notes.md" className={inputCls} />
+        <p className="text-[10px] text-on-surface-variant/60">Comma-separated filenames to inline</p>
+      </div>
+      <div className="space-y-1">
+        <label className={labelCls}>Model</label>
+        <select value={model} onChange={(e) => setModel(e.target.value)} className={inputCls}>
+          <option value="">Default (group)</option>
+          <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+          <option value="claude-opus-4-7">Opus 4.7</option>
+        </select>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id={`dm-${task.id}`}
+          checked={decisionMode}
+          onChange={(e) => setDecisionMode(e.target.checked)}
+          className="accent-primary"
+        />
+        <label htmlFor={`dm-${task.id}`} className="text-[12px] text-on-surface">Decision mode (reach-out vs stay-silent)</label>
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onSave({
+            run_as: runAs || 'default',
+            decision_mode: decisionMode ? 1 : 0,
+            workflow_ref: workflowRef || null,
+            reference_files: referenceFiles || null,
+            model: model || null,
+          })}
+          className="h-7 bg-primary/20 rounded-lg px-3 text-primary text-[11px] font-bold"
+        >
+          Save
+        </button>
+        <button onClick={onCancel} className="h-7 bg-surface-container-highest rounded-lg px-3 text-on-surface-variant text-[11px]">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({ task, isRunning, progress, onRun, onPause, onResume, onDelete, onEdit, expanded, onToggle, editingTaskId, onUpdate }: {
   task: Task;
   isRunning: boolean;
   progress?: TaskProgress;
@@ -25,8 +96,11 @@ function TaskCard({ task, isRunning, progress, onRun, onPause, onResume, onDelet
   onPause: () => void;
   onResume: () => void;
   onDelete: () => void;
+  onEdit: () => void;
   expanded: boolean;
   onToggle: () => void;
+  editingTaskId: string | null;
+  onUpdate: (updates: Partial<Task>) => void;
 }) {
   const isActive = task.status === 'active';
   const isPaused = task.status === 'paused';
@@ -126,12 +200,27 @@ function TaskCard({ task, isRunning, progress, onRun, onPause, onResume, onDelet
               </button>
             )}
             <button
+              onClick={(e) => { e.stopPropagation(); onEdit(); }}
+              className={`h-8 bg-surface-container-highest rounded-lg px-3 flex items-center transition-colors ${editingTaskId === task.id ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
+            >
+              <span className="material-symbols-outlined text-[14px]">tune</span>
+            </button>
+            <button
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
               className="h-8 bg-surface-container-highest rounded-lg px-3 text-error hover:bg-error/10 transition-colors"
             >
               <span className="material-symbols-outlined text-[14px]">delete</span>
             </button>
           </div>
+
+          {/* Inline edit form */}
+          {editingTaskId === task.id && (
+            <TaskEditForm
+              task={task}
+              onSave={(updates) => { onUpdate(updates); onEdit(); }}
+              onCancel={onEdit}
+            />
+          )}
         </div>
       )}
     </div>
@@ -144,6 +233,7 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, runn
   const [scheduleType, setScheduleType] = useState('cron');
   const [scheduleValue, setScheduleValue] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
 
   const handleCreate = () => {
     if (!prompt.trim()) return;
@@ -244,8 +334,11 @@ export function TasksPage({ tasks, onCreate, onUpdate, onDelete, onTestRun, runn
               onPause={() => onUpdate(task.id, { status: 'paused' })}
               onResume={() => onUpdate(task.id, { status: 'active' })}
               onDelete={() => onDelete(task.id)}
+              onEdit={() => setEditingTaskId(editingTaskId === task.id ? null : task.id)}
               expanded={expandedId === task.id}
               onToggle={() => setExpandedId(expandedId === task.id ? null : task.id)}
+              editingTaskId={editingTaskId}
+              onUpdate={(updates) => onUpdate(task.id, updates)}
             />
           ))}
         </div>

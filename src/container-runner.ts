@@ -44,6 +44,7 @@ export interface ContainerInput {
   systemInstruction?: string;
   skipIdentity?: boolean;
   script?: string;
+  model?: string;
 }
 
 export interface ContainerOutput {

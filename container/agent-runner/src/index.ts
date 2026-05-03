@@ -35,6 +35,7 @@ interface ContainerInput {
   systemInstruction?: string;
   skipIdentity?: boolean;
   script?: string;
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -498,6 +499,7 @@ async function runQuery(
         'mcp__nanoclaw__*',
       ],
       env: sdkEnv,
+      model: containerInput.model,
       betas: ['context-1m-2025-08-07'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
