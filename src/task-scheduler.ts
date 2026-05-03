@@ -4,6 +4,9 @@ import { stripMoodTags } from './channels/web/mood.js';
 import fs from 'fs';
 import path from 'path';
 
+import { buildSystemAppend } from './channels/web/context-builder.js';
+import { isFeatureEnabled } from './channels/web/group-config.js';
+import { buildCronRoomContext } from './room/cron-bleed.js';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
@@ -23,6 +26,136 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+const DECISION_MODE_SUFFIX = `\n\nBefore responding, decide whether to send a message. Respond by calling EXACTLY ONE of these actions using the tags below. Do NOT write anything else — any text outside the tags will be discarded.\n\nTo send a message to the user:\n<ACTION>reach_out</ACTION>\n<MESSAGE>your full message to the user here</MESSAGE>\n\nTo decide not to send anything:\n<ACTION>stay_silent</ACTION>\n<REASON>short reason (for logs only, never shown to user)</REASON>`;
+
+export function parseDecisionOutput(raw: string): {
+  action: 'reach_out' | 'stay_silent' | 'malformed';
+  message?: string;
+  reason?: string;
+} {
+  const actionMatch = raw.match(/<ACTION>(reach_out|stay_silent)<\/ACTION>/);
+  if (!actionMatch) return { action: 'malformed' };
+  const action = actionMatch[1] as 'reach_out' | 'stay_silent';
+  if (action === 'reach_out') {
+    const msgMatch = raw.match(/<MESSAGE>([\s\S]*?)<\/MESSAGE>/);
+    return { action, message: msgMatch ? msgMatch[1].trim() : '' };
+  }
+  const reasonMatch = raw.match(/<REASON>([\s\S]*?)<\/REASON>/);
+  return { action, reason: reasonMatch ? reasonMatch[1].trim() : '' };
+}
+
+const MAX_INLINE_BYTES = 32 * 1024;
+
+export function buildTaskPrompt(task: ScheduledTask, groupDir: string): string {
+  const parts: string[] = [];
+
+  if (task.workflow_ref) {
+    const wfPath = path.join(groupDir, 'workflows', `${task.workflow_ref}.md`);
+    try {
+      const contents = fs.readFileSync(wfPath, 'utf8');
+      parts.push(`--- Workflow: ${task.workflow_ref} ---\n${contents}`);
+    } catch {
+      logger.warn(
+        { taskId: task.id, workflow: task.workflow_ref },
+        'Workflow file not found, skipping',
+      );
+    }
+  }
+
+  if (task.reference_files) {
+    const files = task.reference_files
+      .split(',')
+      .map((f) => f.trim())
+      .filter(Boolean);
+    for (const filename of files) {
+      const refPath = path.join(groupDir, filename);
+      try {
+        const contents = fs.readFileSync(refPath, 'utf8');
+        parts.push(`--- Reference: ${filename} ---\n${contents}`);
+      } catch {
+        logger.warn(
+          { taskId: task.id, file: filename },
+          'Reference file not found, skipping',
+        );
+      }
+    }
+  }
+
+  // Room context block (Phase D)
+  if (task.room_read_level && isFeatureEnabled('room_runtime')) {
+    try {
+      const roomContext = buildCronRoomContext(
+        task.group_folder,
+        task.room_read_level,
+      );
+      if (roomContext) parts.push(roomContext);
+    } catch {
+      /* silent — room.db missing */
+    }
+  }
+
+  if (parts.length === 0) return task.prompt;
+
+  parts.push(`--- Your task ---\n${task.prompt}`);
+  let combined = parts.join('\n\n');
+
+  if (Buffer.byteLength(combined, 'utf8') > MAX_INLINE_BYTES) {
+    // Truncate: rebuild section by section, largest first
+    const taskSection = `--- Your task ---\n${task.prompt}`;
+    const budget =
+      MAX_INLINE_BYTES - Buffer.byteLength(taskSection, 'utf8') - 4;
+    const inlineParts = parts.slice(0, -1); // all except task section
+    let used = 0;
+    const trimmed: string[] = [];
+    for (const p of inlineParts) {
+      const bytes = Buffer.byteLength(p, 'utf8');
+      if (used + bytes <= budget) {
+        trimmed.push(p);
+        used += bytes;
+      } else {
+        const remaining = budget - used;
+        if (remaining > 64) {
+          trimmed.push(p.slice(0, remaining) + '\n[truncated]');
+        }
+        break;
+      }
+    }
+    combined = [...trimmed, taskSection].join('\n\n');
+  }
+
+  return combined;
+}
+
+/** Returns the persona system prompt for a task, or null to use the group default. */
+export function loadPersona(
+  task: ScheduledTask,
+  groupDir: string,
+): string | null {
+  if (!task.run_as || task.run_as === 'default' || task.run_as === '')
+    return null;
+  if (!/^[a-zA-Z0-9_-]+$/.test(task.run_as)) {
+    logger.warn(
+      { taskId: task.id, runAs: task.run_as },
+      'Invalid run_as name, using default',
+    );
+    return null;
+  }
+  const personaPath = path.join(groupDir, 'personas', `${task.run_as}.md`);
+  if (!fs.existsSync(personaPath)) {
+    logger.warn(
+      { taskId: task.id, runAs: task.run_as, path: personaPath },
+      'Persona file not found, using default',
+    );
+    return null;
+  }
+  try {
+    return fs.readFileSync(personaPath, 'utf-8');
+  } catch (err) {
+    logger.warn({ taskId: task.id, err }, 'Failed to read persona file');
+    return null;
+  }
+}
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
@@ -34,6 +167,46 @@ export function computeNextRun(task: ScheduledTask): string | null {
   if (task.schedule_type === 'once') return null;
 
   const now = Date.now();
+
+  // Dynamic schedule — agent writes next check-in time to a file after each run.
+  // File: groups/<group>/next_checkin.json with { "next_run_at": "ISO", "reason": "..." }
+  // Safe bounds: min 20 minutes, max 12 hours. Falls back to 1h if missing/invalid.
+  if (task.schedule_type === 'dynamic') {
+    const MIN_GAP_MS = 20 * 60 * 1000; // 20 min floor
+    const MAX_GAP_MS = 12 * 60 * 60 * 1000; // 12 hour ceiling
+    const FALLBACK_MS = 60 * 60 * 1000; // 1 hour if file missing/invalid
+    try {
+      const groupDir = resolveGroupFolderPath(task.group_folder);
+      const checkinPath = path.join(groupDir, 'next_checkin.json');
+      if (fs.existsSync(checkinPath)) {
+        const raw = JSON.parse(fs.readFileSync(checkinPath, 'utf-8'));
+        if (raw.next_run_at && typeof raw.next_run_at === 'string') {
+          const requested = new Date(raw.next_run_at).getTime();
+          if (!isNaN(requested)) {
+            const gap = requested - now;
+            const boundedGap = Math.min(MAX_GAP_MS, Math.max(MIN_GAP_MS, gap));
+            const boundedAt = new Date(now + boundedGap).toISOString();
+            logger.info(
+              {
+                taskId: task.id,
+                requested: raw.next_run_at,
+                chosen: boundedAt,
+                reason: raw.reason,
+              },
+              'Dynamic schedule — next check-in set by agent',
+            );
+            return boundedAt;
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { taskId: task.id, err },
+        'Dynamic schedule — failed to read next_checkin.json, using fallback',
+      );
+    }
+    return new Date(now + FALLBACK_MS).toISOString();
+  }
 
   if (task.schedule_type === 'cron') {
     const interval = CronExpressionParser.parse(task.schedule_value, {
@@ -183,7 +356,37 @@ async function runTask(
     minute: '2-digit',
     timeZoneName: 'short',
   });
-  const taskPrompt = `[Current date/time: ${taskNow}]\n\n${task.prompt}`;
+  const basePrompt = buildTaskPrompt(task, groupDir);
+  const withDecision =
+    task.decision_mode === 1 ? basePrompt + DECISION_MODE_SUFFIX : basePrompt;
+  const taskPrompt = `[Current date/time: ${taskNow}]\n\n${withDecision}`;
+
+  // Build system instruction: persona override if set, otherwise group default.
+  const persona = loadPersona(task, groupDir);
+  let systemInstruction: string | undefined;
+  if (persona) {
+    systemInstruction = persona;
+  } else {
+    try {
+      systemInstruction = buildSystemAppend({
+        sessionId: sessionId || 'default',
+        groupFolder: task.group_folder,
+        chatJid: task.chat_jid,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, taskId: task.id },
+        'Failed to build systemAppend for task, continuing without it',
+      );
+    }
+  }
+
+  const personaPrefix =
+    task.run_as && task.run_as !== 'default' && task.run_as !== ''
+      ? `[${task.run_as}] `
+      : '';
+
+  let hasSent = false;
 
   try {
     const output = await runContainerAgent(
@@ -197,17 +400,39 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         script: task.script || undefined,
+        systemInstruction,
+        model: task.model ?? undefined,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
-        if (streamedOutput.result) {
+        if (streamedOutput.result && !hasSent) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(
-            task.chat_jid,
-            stripMoodTags(streamedOutput.result),
-          );
+          hasSent = true;
+          if (task.decision_mode === 1) {
+            const decision = parseDecisionOutput(streamedOutput.result);
+            if (decision.action === 'reach_out' && decision.message) {
+              await deps.sendMessage(
+                task.chat_jid,
+                personaPrefix + decision.message,
+              );
+            } else if (decision.action === 'stay_silent') {
+              logger.info(
+                { taskId: task.id, reason: decision.reason },
+                'Task decided to stay silent',
+              );
+            } else {
+              logger.warn(
+                { taskId: task.id },
+                'Task output malformed — not sending',
+              );
+            }
+          } else {
+            await deps.sendMessage(
+              task.chat_jid,
+              personaPrefix + stripMoodTags(streamedOutput.result),
+            );
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -395,7 +620,33 @@ export async function runTaskNow(
     minute: '2-digit',
     timeZoneName: 'short',
   });
-  const runNowPrompt = `[Current date/time: ${runNow}]\n\n${task.prompt}`;
+  const runNowBase = buildTaskPrompt(task, groupDir);
+  const runNowWithDecision =
+    task.decision_mode === 1 ? runNowBase + DECISION_MODE_SUFFIX : runNowBase;
+  const runNowPrompt = `[Current date/time: ${runNow}]\n\n${runNowWithDecision}`;
+
+  const runNowPersona = loadPersona(task, groupDir);
+  let runNowSystemInstruction: string | undefined;
+  if (runNowPersona) {
+    runNowSystemInstruction = runNowPersona;
+  } else {
+    try {
+      runNowSystemInstruction = buildSystemAppend({
+        sessionId: sessionId || 'default',
+        groupFolder: task.group_folder,
+        chatJid: task.chat_jid,
+      });
+    } catch {
+      // continue without system instruction
+    }
+  }
+
+  const runNowPersonaPrefix =
+    task.run_as && task.run_as !== 'default' && task.run_as !== ''
+      ? `[${task.run_as}] `
+      : '';
+
+  let hasSent = false;
 
   onProgress?.({ type: 'task_started', taskId });
 
@@ -410,6 +661,8 @@ export async function runTaskNow(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        systemInstruction: runNowSystemInstruction,
+        model: task.model ?? undefined,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
@@ -422,12 +675,33 @@ export async function runTaskNow(
             target: streamedOutput.toolUse.target,
           });
         }
-        if (streamedOutput.result) {
+        if (streamedOutput.result && !hasSent) {
           result = streamedOutput.result;
-          await deps.sendMessage(
-            task.chat_jid,
-            stripMoodTags(streamedOutput.result),
-          );
+          hasSent = true;
+          if (task.decision_mode === 1) {
+            const decision = parseDecisionOutput(streamedOutput.result);
+            if (decision.action === 'reach_out' && decision.message) {
+              await deps.sendMessage(
+                task.chat_jid,
+                runNowPersonaPrefix + decision.message,
+              );
+            } else if (decision.action === 'stay_silent') {
+              logger.info(
+                { taskId: task.id, reason: decision.reason },
+                'Task decided to stay silent',
+              );
+            } else {
+              logger.warn(
+                { taskId: task.id },
+                'Task output malformed — not sending',
+              );
+            }
+          } else {
+            await deps.sendMessage(
+              task.chat_jid,
+              runNowPersonaPrefix + stripMoodTags(streamedOutput.result),
+            );
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
