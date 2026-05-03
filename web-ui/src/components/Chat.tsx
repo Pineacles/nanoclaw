@@ -87,7 +87,7 @@ export function Chat({ messages, isTyping, toolStatus, isQueued, connected, onSe
             <div className="flex flex-col items-center gap-3 lg:gap-4 px-4">
               {/* Mobile: compact greeting */}
               <div className="w-12 h-12 lg:w-[72px] lg:h-[72px] signature-glow rounded-full flex items-center justify-center shadow-[0_10px_40px_rgba(255,144,109,0.4)]">
-                <span className="material-symbols-outlined text-on-primary-fixed text-xl lg:text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>favorite</span>
+                <span className="material-symbols-outlined text-on-primary-fixed text-xl lg:text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>chat_bubble</span>
               </div>
               <h1 className="text-xl lg:text-4xl font-black text-on-background tracking-tighter text-center">
                 {greeting}

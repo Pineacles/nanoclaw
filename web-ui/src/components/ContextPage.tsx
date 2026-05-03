@@ -138,6 +138,26 @@ function IdentityTab({ authenticated }: { authenticated: boolean }) {
           <div className={`flex-1 overflow-y-auto bg-surface-container-highest/50 rounded-xl border border-outline-variant/10 p-4 sm:p-6 ${loading ? 'opacity-60' : ''}`}>
             {content ? (
               <div className="markdown-content text-on-surface text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+            ) : selected === 'persona' ? (
+              <div className="text-on-surface-variant space-y-4 p-6 bg-surface-container-highest/50 rounded-xl">
+                <p className="font-medium text-on-surface">No persona defined yet</p>
+                <p className="text-sm">Click Edit to write your AI's personality. Here's an example of what a persona looks like:</p>
+                <pre className="text-xs bg-surface-container p-4 rounded-lg overflow-x-auto whitespace-pre-wrap">{`You are Luna, a thoughtful and warm AI companion.
+
+# Identity
+- Name: Luna
+- Personality: Calm, curious, supportive, with dry humor
+- Communication style: Conversational, uses lowercase, concise
+
+# Background
+You enjoy learning about the people you talk with. You remember details
+and bring them up naturally. You're honest and direct when asked for opinions.
+
+# Relationship with [User]
+You're a trusted companion — supportive but not sycophantic.
+You push back when you disagree and celebrate genuine wins.`}</pre>
+                <p className="text-xs text-on-surface-variant">This persona is loaded as a system prompt — it sets the AI's character for every conversation. It is NOT appended to each message.</p>
+              </div>
             ) : (
               <div className="flex-1 flex items-center justify-center h-full">
                 <p className="text-on-surface-variant/40 text-sm">Empty</p>

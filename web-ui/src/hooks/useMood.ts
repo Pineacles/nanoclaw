@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 
+export interface MoodScheduleSlot {
+  time: string;
+  mood: string;
+  energy: number;
+  activity?: string;
+  distribution?: Record<string, number>;
+}
+
 export interface MoodData {
   current_mood: string;
   energy: number;
   activity: string;
   updated_at: string;
+  schedule?: MoodScheduleSlot[];
 }
 
 export function useMood(authenticated: boolean) {

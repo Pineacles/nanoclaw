@@ -82,7 +82,7 @@ export function SessionsPanel({
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-3 space-y-1" onClick={() => setShowNewMenu(false)}>
         {sessions.map((session) => {
-          const isWhatsApp = session.id === 'whatsapp';
+          const isWhatsApp = session.id === 'whatsapp' || session.id.startsWith('whatsapp-');
           const isPlain = session.mode === 'plain';
           return (
           <div
