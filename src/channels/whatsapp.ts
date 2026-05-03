@@ -105,11 +105,17 @@ export class WhatsAppChannel implements Channel {
         pairingRequested = true;
         const cleanPhone = pairingPhone.replace(/[^0-9]/g, '');
         logger.info({ phone: cleanPhone }, 'Requesting pairing code...');
-        this.sock.requestPairingCode(cleanPhone).then((code: string) => {
-          logger.info({ code }, '=== WHATSAPP PAIRING CODE — enter this on the phone ===');
-        }).catch((err: unknown) => {
-          logger.error({ err }, 'Failed to request pairing code');
-        });
+        this.sock
+          .requestPairingCode(cleanPhone)
+          .then((code: string) => {
+            logger.info(
+              { code },
+              '=== WHATSAPP PAIRING CODE — enter this on the phone ===',
+            );
+          })
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Failed to request pairing code');
+          });
         return;
       }
 
@@ -724,14 +730,11 @@ export class WhatsAppChannel implements Channel {
   }
 }
 
-registerChannel(
-  'whatsapp',
-  (opts: ChannelOpts) => {
-    if (process.env.NANOCLAW_DISABLE_WHATSAPP === '1') return null;
-    return new WhatsAppChannel({
-      ...opts,
-      bridgeJids: opts.whatsappBridgeJids,
-      onBridgeMessage: opts.onBridgeMessage,
-    });
-  },
-);
+registerChannel('whatsapp', (opts: ChannelOpts) => {
+  if (process.env.NANOCLAW_DISABLE_WHATSAPP === '1') return null;
+  return new WhatsAppChannel({
+    ...opts,
+    bridgeJids: opts.whatsappBridgeJids,
+    onBridgeMessage: opts.onBridgeMessage,
+  });
+});
