@@ -37,10 +37,11 @@ export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
-  /** If set, messages from this JID are bridged to the web channel instead of the normal pipeline. */
-  bridgeJid?: string;
-  /** Called when a message arrives from the bridgeJid. */
+  /** If set, messages from these JIDs are bridged to the web channel instead of the normal pipeline. */
+  bridgeJids?: string[];
+  /** Called when a message arrives from one of the bridgeJids. */
   onBridgeMessage?: (
+    senderJid: string,
     senderName: string,
     content: string,
     images?: Buffer[],
@@ -93,10 +94,26 @@ export class WhatsAppChannel implements Channel {
       browser: Browsers.macOS('Chrome'),
     });
 
+    // Request pairing code if phone number is set and not yet registered
+    const pairingPhone = process.env.WHATSAPP_PAIRING_PHONE;
+    let pairingRequested = false;
+
     this.sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr) {
+      if (qr && pairingPhone && !pairingRequested) {
+        pairingRequested = true;
+        const cleanPhone = pairingPhone.replace(/[^0-9]/g, '');
+        logger.info({ phone: cleanPhone }, 'Requesting pairing code...');
+        this.sock.requestPairingCode(cleanPhone).then((code: string) => {
+          logger.info({ code }, '=== WHATSAPP PAIRING CODE — enter this on the phone ===');
+        }).catch((err: unknown) => {
+          logger.error({ err }, 'Failed to request pairing code');
+        });
+        return;
+      }
+
+      if (qr && !pairingPhone) {
         const msg =
           'WhatsApp authentication required. Run /setup in Claude Code.';
         logger.error(msg);
@@ -212,10 +229,9 @@ export class WhatsAppChannel implements Channel {
             isGroup,
           );
 
-          // Bridge mode: intercept messages from the bridged JID
+          // Bridge mode: intercept messages from any of the bridged JIDs
           if (
-            this.opts.bridgeJid &&
-            chatJid === this.opts.bridgeJid &&
+            this.opts.bridgeJids?.includes(chatJid) &&
             this.opts.onBridgeMessage
           ) {
             const fromMe = msg.key.fromMe || false;
@@ -255,6 +271,7 @@ export class WhatsAppChannel implements Channel {
                 // Videos are too large to inject — just note it in the text
                 const videoCaption = normalized.videoMessage.caption || '';
                 this.opts.onBridgeMessage(
+                  chatJid,
                   senderName,
                   videoCaption
                     ? `${content}\n[Video attached]`
@@ -267,6 +284,7 @@ export class WhatsAppChannel implements Channel {
             }
 
             this.opts.onBridgeMessage(
+              chatJid,
               senderName,
               content || '',
               images.length > 0 ? images : undefined,
@@ -395,14 +413,10 @@ export class WhatsAppChannel implements Channel {
                   { err, chatJid },
                   'Failed to download WhatsApp media',
                 );
-                if (normalized.imageMessage)
-                  content += '\n[Image: download failed]';
-                if (normalized.videoMessage)
-                  content += '\n[Video: download failed]';
-                if (normalized.audioMessage)
-                  content += '\n[Voice note: download failed]';
-                if (normalized.documentMessage)
-                  content += '\n[Document: download failed]';
+                // Caption text (if any) is still usable — don't pollute it
+                // with a download-failed marker. Messages with no text and
+                // failed download will be dropped by the !content.trim() guard
+                // below, which is the correct behaviour.
               }
             }
 
@@ -712,10 +726,12 @@ export class WhatsAppChannel implements Channel {
 
 registerChannel(
   'whatsapp',
-  (opts: ChannelOpts) =>
-    new WhatsAppChannel({
+  (opts: ChannelOpts) => {
+    if (process.env.NANOCLAW_DISABLE_WHATSAPP === '1') return null;
+    return new WhatsAppChannel({
       ...opts,
-      bridgeJid: opts.whatsappBridgeJid,
+      bridgeJids: opts.whatsappBridgeJids,
       onBridgeMessage: opts.onBridgeMessage,
-    }),
+    });
+  },
 );

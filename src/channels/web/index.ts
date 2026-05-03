@@ -10,7 +10,7 @@ registerChannel('web', (opts) => {
   return createWebChannel({
     ...opts,
     runTaskNow: opts.runTaskNow,
-    whatsappBridgeJid: opts.whatsappBridgeJid,
+    whatsappBridgeJids: opts.whatsappBridgeJids,
     sendToWhatsApp: opts.sendToWhatsApp,
   });
 });

@@ -4,22 +4,37 @@ import { logger } from './logger.js';
 
 /**
  * Parse the .env file and return values for the requested keys.
+ * process.env takes precedence over .env file values — this allows
+ * systemd EnvironmentFile overrides for multi-instance deployments.
  * Does NOT load anything into process.env — callers decide what to
  * do with the values. This keeps secrets out of the process environment
  * so they don't leak to child processes.
  */
 export function readEnvFile(keys: string[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  const wanted = new Set(keys);
+  const remaining = new Set(keys);
+
+  // Check process.env first (set by systemd EnvironmentFile or shell)
+  for (const key of wanted) {
+    if (process.env[key]) {
+      result[key] = process.env[key]!;
+      remaining.delete(key);
+    }
+  }
+
+  // If all keys found in process.env, skip .env file
+  if (remaining.size === 0) return result;
+
+  // Fall back to .env file for remaining keys
   const envFile = path.join(process.cwd(), '.env');
   let content: string;
   try {
     content = fs.readFileSync(envFile, 'utf-8');
   } catch (err) {
     logger.debug({ err }, '.env file not found, using defaults');
-    return {};
+    return result;
   }
-
-  const result: Record<string, string> = {};
-  const wanted = new Set(keys);
 
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -27,7 +42,7 @@ export function readEnvFile(keys: string[]): Record<string, string> {
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) continue;
     const key = trimmed.slice(0, eqIdx).trim();
-    if (!wanted.has(key)) continue;
+    if (!remaining.has(key)) continue;
     let value = trimmed.slice(eqIdx + 1).trim();
     if (
       value.length >= 2 &&

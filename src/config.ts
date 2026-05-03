@@ -36,9 +36,9 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'nanoclaw',
   'sender-allowlist.json',
 );
-export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
+export const STORE_DIR = path.resolve(PROJECT_ROOT, process.env.NANOCLAW_STORE_DIR || 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
-export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+export const DATA_DIR = path.resolve(PROJECT_ROOT, process.env.NANOCLAW_DATA_DIR || 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

@@ -20,9 +20,10 @@ export interface ChannelOpts {
     duration_ms: number;
   }>;
   // WhatsApp bridge config
-  whatsappBridgeJid?: string;
+  whatsappBridgeJids?: string[];
   sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
   onBridgeMessage?: (
+    senderJid: string,
     senderName: string,
     content: string,
     images?: Buffer[],
