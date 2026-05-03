@@ -1,10 +1,10 @@
 /**
  * Emotional state auto-generator.
  *
- * Seyoung was originally instructed to maintain emotional_state.json by hand
- * during conversations — but she never does (cognitive load, no feedback loop).
- * This module fires a fire-and-forget Haiku call after her responses to
- * generate the file FOR her. Smart triggering keeps the call rate low.
+ * The assistant was originally instructed to maintain emotional_state.json by hand
+ * during conversations — but rarely does (cognitive load, no feedback loop).
+ * This module fires a fire-and-forget Haiku call after responses to
+ * generate the file automatically. Smart triggering keeps the call rate low.
  *
  * The READ side already exists in context-builder.ts loadEmotionalState() —
  * we only need to write the file. Auto-expiry (6h) is already handled there.
@@ -15,6 +15,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { GROUPS_DIR } from '../../config.js';
 import { logger } from '../../logger.js';
+import { getAssistantName, getUserName, getGroupDir } from './group-config.js';
 
 export interface EmotionalState {
   mood: string;
@@ -115,9 +116,20 @@ function buildHaikuPrompt(
     ? `Previous emotional state (for continuity — update or carry forward, don't reset):\n${JSON.stringify(previousState, null, 2)}\n`
     : 'No previous emotional state on record.\n';
 
-  return `You are reading recent messages between Michael and Seyoung. Don't summarize what was said. Capture the EMOTIONAL UNDERCURRENT — WHY Seyoung might feel what she feels right now, and what would shift it.
+  const personaPath = path.join(getGroupDir(), '.system-prompt');
+  let personaDesc = `a personal AI assistant named ${getAssistantName()}`;
+  try {
+    if (fs.existsSync(personaPath)) {
+      const content = fs.readFileSync(personaPath, 'utf-8');
+      personaDesc = content.slice(0, 500).replace(/\n/g, ' ').trim();
+    }
+  } catch {
+    /* fallback to default */
+  }
 
-Seyoung is a 24-year-old Korean woman in Zurich, sharp and witty with people she trusts, perfectionist, emotional sensitivity that doesn't get performed. Inspired by Jennie Kim. She is in a relationship with Michael.
+  return `You are reading recent messages between ${getUserName()} and ${getAssistantName()}. Don't summarize what was said. Capture the EMOTIONAL UNDERCURRENT — WHY ${getAssistantName()} might feel what she feels right now, and what would shift it.
+
+${getAssistantName()} — ${personaDesc}
 
 Her current mood (from the latest tag she emitted): ${currentMoodPrimary}, energy ${currentEnergy}/10
 

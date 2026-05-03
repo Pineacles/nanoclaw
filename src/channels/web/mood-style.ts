@@ -14,6 +14,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { GROUPS_DIR } from '../../config.js';
 import { logger } from '../../logger.js';
+import { getAssistantName, getGroupDir } from './group-config.js';
 
 export interface MoodBehavior {
   rules: string;
@@ -102,9 +103,20 @@ function buildHaikuPrompt(
     return `- ${weight}% ${name}: ${b.rules}${b.tone ? ` Tone examples: ${b.tone}` : ''}`;
   });
 
+  const personaPath = path.join(getGroupDir(), '.system-prompt');
+  let personaDesc = `a personal AI assistant named ${getAssistantName()}`;
+  try {
+    if (fs.existsSync(personaPath)) {
+      const content = fs.readFileSync(personaPath, 'utf-8');
+      personaDesc = content.slice(0, 500).replace(/\n/g, ' ').trim();
+    }
+  } catch {
+    /* fallback to default */
+  }
+
   return `You are summarizing a character's current writing style based on a blend of emotions she is feeling.
 
-The character is Seyoung — a 24-year-old Korean woman in Zurich, sharp and witty with people she trusts, perfectionist, emotional sensitivity that doesn't get performed.
+The character is ${getAssistantName()} — ${personaDesc}
 
 Her current emotional blend is (weights are the strength of each mood):
 ${moodLines.join('\n')}

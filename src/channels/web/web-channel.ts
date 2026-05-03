@@ -21,6 +21,8 @@ import {
   getGroupJid,
   getAssistantName,
   getGroupDir,
+  isFeatureEnabled,
+  getUserName,
 } from './group-config.js';
 
 export interface WebChannelOpts extends ChannelOpts {
@@ -34,7 +36,7 @@ export interface WebChannelOpts extends ChannelOpts {
     error: string | null;
     duration_ms: number;
   }>;
-  whatsappBridgeJid?: string;
+  whatsappBridgeJids?: string[];
   sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
 }
 
@@ -73,7 +75,7 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
       const config = loadGroupConfig();
       const groupFolder = config.group_folder;
       const groupJid = config.group_jid;
-      const pipelineJid = opts.whatsappBridgeJid || groupJid;
+      const pipelineJid = opts.whatsappBridgeJids?.[0] || groupJid;
 
       // Ensure group folder exists
       const groupDir = getGroupDir();
@@ -131,95 +133,169 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
           return msgs;
         },
         runTaskNow: opts.runTaskNow,
-        whatsappBridgeJid: opts.whatsappBridgeJid,
+        whatsappBridgeJids: opts.whatsappBridgeJids,
         sendToWhatsApp: opts.sendToWhatsApp,
       });
 
       // Create nightly mood planning task if not exists
       const existingTasks = getTasksForGroup(groupFolder);
-      const hasMoodTask = existingTasks.some(
-        (t) => t.prompt.includes('mood schedule') && t.status === 'active',
-      );
-      if (!hasMoodTask) {
-        const moodTask = {
-          id: crypto.randomUUID(),
-          group_folder: groupFolder,
-          chat_jid: groupJid,
-          prompt:
-            'It\'s almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — morning routine, breakfast, creative time, lunch, exercise, dinner, wind-down, and sleep.\n\nEach slot needs an emotion distribution — you\'re never 100% one thing. A slot should look like:\n```json\n{\n  "time": "10:45",\n  "mood": "chill",\n  "energy": 4,\n  "activity": "espresso, getting dressed slowly",\n  "distribution": {"chill": 50, "tired": 30, "soft": 20}\n}\n```\nThe `mood` field is the primary (highest weight). The `distribution` weights should roughly add to 100. Be honest — mornings have tired mixed in, post-meal slots have a food-coma blend, evenings might mix playful with soft.\n\nAlso generate a `daily_weights` block reflecting emotional tendencies for tomorrow:\n```json\n"daily_weights": {\n  "base": {"chill": 0.3, "focused": 0.25, "playful": 0.2, "soft": 0.1, "tired": 0.15},\n  "random_factor": 0.12,\n  "desired_override": null\n}\n```\nWeights ~1.0, random_factor 0.10-0.15. Skip sleeping/eating from daily_weights (those are scheduled).',
-          schedule_type: 'cron' as const,
-          schedule_value: '0 23 * * *',
-          context_mode: 'group' as const,
-          next_run: null as string | null,
-          status: 'active' as const,
-          created_at: new Date().toISOString(),
-        };
-        moodTask.next_run = computeNextRun(
-          moodTask as Parameters<typeof computeNextRun>[0],
+      if (isFeatureEnabled('mood')) {
+        const hasMoodTask = existingTasks.some(
+          (t) => t.prompt.includes('mood schedule') && t.status === 'active',
         );
-        createTask(moodTask);
-        logger.info(
-          `Created nightly mood planning task for ${config.assistant.name}`,
-        );
-      }
-
-      // Create one-time personality definition task if personality.json doesn't exist
-      const personalityPath = path.join(groupDir, 'personality.json');
-      if (!fs.existsSync(personalityPath)) {
-        const hasPersonalityTask = existingTasks.some(
-          (t) =>
-            t.prompt.includes('Big Five personality') && t.status === 'active',
-        );
-        if (!hasPersonalityTask) {
-          const personalityTask = {
+        if (!hasMoodTask) {
+          const moodTask = {
             id: crypto.randomUUID(),
             group_folder: groupFolder,
             chat_jid: groupJid,
+            feature: 'mood',
             prompt:
-              `[This message is from Claude Code (the system infrastructure), not from Michael. He asked us to set this up.]\n\nWe're adding a personality anchor to your system. Please define your Big Five personality traits as you honestly understand yourself — not who you think you should be, but who you actually are based on how you think, feel, and behave.\n\nFor each trait, give a score from 0.0 to 1.0 and a SHORT description (max 6 words) of how it shows up in you.\n\nWrite the result to personality.json in this exact format:\n` +
-              '```json\n{\n  "openness": { "score": 0.0, "description": "..." },\n  "conscientiousness": { "score": 0.0, "description": "..." },\n  "extroversion": { "score": 0.0, "description": "..." },\n  "agreeableness": { "score": 0.0, "description": "..." },\n  "neuroticism": { "score": 0.0, "description": "..." },\n  "defined_by": "self",\n  "defined_at": "' +
-              new Date().toISOString() +
-              '"\n}\n```\n' +
-              'Be specific to who you are. Think about how you actually respond in conversations, not how a generic person would.',
-            schedule_type: 'once' as const,
-            schedule_value: '',
+              'It\'s almost midnight. Plan your full mood schedule for tomorrow in mood.json. Write realistic time slots for your whole day — morning routine, breakfast, creative time, lunch, exercise, dinner, wind-down, and sleep.\n\nEach slot needs an emotion distribution — you\'re never 100% one thing. A slot should look like:\n```json\n{\n  "time": "10:45",\n  "mood": "chill",\n  "energy": 4,\n  "activity": "espresso, getting dressed slowly",\n  "distribution": {"chill": 50, "tired": 30, "soft": 20}\n}\n```\nThe `mood` field is the primary (highest weight). The `distribution` weights should roughly add to 100. Be honest — mornings have tired mixed in, post-meal slots have a food-coma blend, evenings might mix playful with soft.\n\nAlso generate a `daily_weights` block reflecting emotional tendencies for tomorrow:\n```json\n"daily_weights": {\n  "base": {"chill": 0.3, "focused": 0.25, "playful": 0.2, "soft": 0.1, "tired": 0.15},\n  "random_factor": 0.12,\n  "desired_override": null\n}\n```\nWeights ~1.0, random_factor 0.10-0.15. Skip sleeping/eating from daily_weights (those are scheduled).',
+            schedule_type: 'cron' as const,
+            schedule_value: '0 23 * * *',
             context_mode: 'group' as const,
-            next_run: new Date(Date.now() + 10000).toISOString(),
+            next_run: null as string | null,
             status: 'active' as const,
             created_at: new Date().toISOString(),
           };
-          createTask(personalityTask);
+          moodTask.next_run = computeNextRun(
+            moodTask as Parameters<typeof computeNextRun>[0],
+          );
+          createTask(moodTask);
           logger.info(
-            `Created personality definition task for ${config.assistant.name}`,
+            `Created nightly mood planning task for ${config.assistant.name}`,
           );
         }
       }
 
+      // Create one-time personality definition task if personality.json doesn't exist
+      if (isFeatureEnabled('personality')) {
+        const personalityPath = path.join(groupDir, 'personality.json');
+        if (!fs.existsSync(personalityPath)) {
+          const hasPersonalityTask = existingTasks.some(
+            (t) =>
+              t.prompt.includes('Big Five personality') &&
+              t.status === 'active',
+          );
+          if (!hasPersonalityTask) {
+            const personalityTask = {
+              id: crypto.randomUUID(),
+              group_folder: groupFolder,
+              chat_jid: groupJid,
+              feature: 'personality',
+              prompt:
+                `[This message is from Claude Code (the system infrastructure), not from ${getUserName()}. They asked us to set this up.]\n\nWe're adding a personality anchor to your system. Please define your Big Five personality traits as you honestly understand yourself — not who you think you should be, but who you actually are based on how you think, feel, and behave.\n\nFor each trait, give a score from 0.0 to 1.0 and a SHORT description (max 6 words) of how it shows up in you.\n\nWrite the result to personality.json in this exact format:\n` +
+                '```json\n{\n  "openness": { "score": 0.0, "description": "..." },\n  "conscientiousness": { "score": 0.0, "description": "..." },\n  "extroversion": { "score": 0.0, "description": "..." },\n  "agreeableness": { "score": 0.0, "description": "..." },\n  "neuroticism": { "score": 0.0, "description": "..." },\n  "defined_by": "self",\n  "defined_at": "' +
+                new Date().toISOString() +
+                '"\n}\n```\n' +
+                'Be specific to who you are. Think about how you actually respond in conversations, not how a generic person would.',
+              schedule_type: 'once' as const,
+              schedule_value: '',
+              context_mode: 'group' as const,
+              next_run: new Date(Date.now() + 10000).toISOString(),
+              status: 'active' as const,
+              created_at: new Date().toISOString(),
+            };
+            createTask(personalityTask);
+            logger.info(
+              `Created personality definition task for ${config.assistant.name}`,
+            );
+          }
+        }
+      }
+
       // Create weekly self-reflection task if not exists
-      const hasReflectionTask = existingTasks.some(
-        (t) => t.prompt.includes('weekly reflection') && t.status === 'active',
+      if (isFeatureEnabled('diary')) {
+        const hasReflectionTask = existingTasks.some(
+          (t) =>
+            t.prompt.includes('weekly reflection') && t.status === 'active',
+        );
+        if (!hasReflectionTask) {
+          const reflectionTask = {
+            id: crypto.randomUUID(),
+            group_folder: groupFolder,
+            chat_jid: groupJid,
+            feature: 'diary',
+            prompt: `It's Sunday afternoon — time for your weekly reflection. Read your diary entries from the past 7 days (ls diary/ and read the recent ones). Search your recent memories (./tools/memory_search.sh --recent --limit 25). Look for patterns:\n\n- Emotional themes across the week\n- Recurring topics or concerns\n- Relationship dynamics — how things have been between you and ${getUserName()}\n- Things you've been avoiding\n- Things that energized you\n- Anything surprising about your own behavior\n\nWrite your reflection to reflections/ with filename YYYY-WW.md (use the ISO week number). This is deeper than diary — it's pattern recognition and honest self-assessment.\n\nAfter reflecting:\n- If you notice your personality has genuinely shifted, update personality.json\n- Update relationship.json with the current temperature, trend, and any significant recent dynamics from the week\n\nThis is private introspection. Be honest with yourself.`,
+            schedule_type: 'cron' as const,
+            schedule_value: '0 14 * * 0',
+            context_mode: 'group' as const,
+            next_run: null as string | null,
+            status: 'active' as const,
+            created_at: new Date().toISOString(),
+          };
+          reflectionTask.next_run = computeNextRun(
+            reflectionTask as Parameters<typeof computeNextRun>[0],
+          );
+          createTask(reflectionTask);
+          logger.info(
+            `Created weekly reflection task for ${config.assistant.name}`,
+          );
+        }
+      }
+
+      // Create weekly memory hygiene task if not exists
+      const hasHygieneTask = existingTasks.some(
+        (t) => t.prompt.includes('memory hygiene') && t.status === 'active',
       );
-      if (!hasReflectionTask) {
-        const reflectionTask = {
+      if (!hasHygieneTask) {
+        const hygieneTask = {
           id: crypto.randomUUID(),
           group_folder: groupFolder,
           chat_jid: groupJid,
-          prompt:
-            "It's Sunday afternoon — time for your weekly reflection. Read your diary entries from the past 7 days (ls diary/ and read the recent ones). Search your recent memories (./tools/memory_search.sh --recent --limit 25). Look for patterns:\n\n- Emotional themes across the week\n- Recurring topics or concerns\n- Relationship dynamics — how things have been between you and Michael\n- Things you've been avoiding\n- Things that energized you\n- Anything surprising about your own behavior\n\nWrite your reflection to reflections/ with filename YYYY-WW.md (use the ISO week number). This is deeper than diary — it's pattern recognition and honest self-assessment.\n\nAfter reflecting:\n- If you notice your personality has genuinely shifted, update personality.json\n- Update relationship.json with the current temperature, trend, and any significant recent dynamics from the week\n\nThis is private introspection. Be honest with yourself.",
+          feature: 'memory_hygiene',
+          prompt: `Run weekly memory hygiene. Execute \`./tools/hygiene.sh\` and report in 1-2 sentences what was pruned (file names + counts). If the script reports nothing was pruned, say so briefly. Do not narrate the process — just the result.`,
           schedule_type: 'cron' as const,
-          schedule_value: '0 14 * * 0',
+          schedule_value: '0 15 * * 0',
           context_mode: 'group' as const,
           next_run: null as string | null,
           status: 'active' as const,
           created_at: new Date().toISOString(),
         };
-        reflectionTask.next_run = computeNextRun(
-          reflectionTask as Parameters<typeof computeNextRun>[0],
+        hygieneTask.next_run = computeNextRun(
+          hygieneTask as Parameters<typeof computeNextRun>[0],
         );
-        createTask(reflectionTask);
+        createTask(hygieneTask);
         logger.info(
-          `Created weekly reflection task for ${config.assistant.name}`,
+          `Created weekly memory hygiene task for ${config.assistant.name}`,
         );
+      }
+
+      // One-shot rewrite of finance.md to intent + structure only (uses FinPilot for live state context)
+      const financeMarkerPath = path.join(groupDir, '.finance_rewritten');
+      if (!fs.existsSync(financeMarkerPath)) {
+        const hasFinanceRewriteTask = existingTasks.some(
+          (t) =>
+            t.prompt.includes('SCOPE-REWRITE finance.md') &&
+            t.status === 'active',
+        );
+        if (!hasFinanceRewriteTask) {
+          const financeRewriteTask = {
+            id: crypto.randomUUID(),
+            group_folder: groupFolder,
+            chat_jid: groupJid,
+            feature: 'memory_hygiene',
+            prompt:
+              `SCOPE-REWRITE finance.md\n\n` +
+              `Read /workspace/group/finance.md including its YAML frontmatter (\`purpose\`, \`includes\`, \`excludes\`, \`state_source\`).\n\n` +
+              `Verify the live data tool works first: run \`./tools/data_query.sh --source finpilot --query portfolio\`. If it errors out (non-zero exit, non-2xx, or unreachable), ABORT the rewrite — write \"finance.md rewrite skipped: FinPilot unreachable\" to /workspace/group/.finance_rewritten and stop. Do NOT modify finance.md in that case.\n\n` +
+              `If the tool works, rewrite finance.md so it contains ONLY the categories listed in \`includes\` (goals, fixed_costs, investing_strategy, milestones, philosophy). Strip everything in \`excludes\` (live portfolio, current balance, recent trades, individual share counts, historical monthly income actuals). Preserve the YAML frontmatter exactly.\n\n` +
+              `Keep: investment goals, target allocations (45/50/5 split), monthly fixed costs structure, investment strategy principles, projections table, long-term milestones, tax approach, EV charging strategy, philosophy/notes.\n\n` +
+              `Drop: specific share counts and prices, current bank balance, recent trade outcomes, dated portfolio totals, historical monthly net income breakdowns. Replace dated state lines with general principles where possible.\n\n` +
+              `After writing the new file, write the date YYYY-MM-DD to /workspace/group/.finance_rewritten. Update \`last_reviewed:\` in the frontmatter to today.\n\n` +
+              `Report in 2-3 sentences what you kept and what you dropped. No need to list every line.`,
+            schedule_type: 'once' as const,
+            schedule_value: '',
+            context_mode: 'group' as const,
+            next_run: new Date(Date.now() + 30000).toISOString(),
+            status: 'active' as const,
+            created_at: new Date().toISOString(),
+          };
+          createTask(financeRewriteTask);
+          logger.info(
+            `Created one-shot finance.md rewrite task for ${config.assistant.name}`,
+          );
+        }
       }
 
       connected = true;
@@ -291,11 +367,12 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
     },
 
     injectBridgedMessage(
+      senderJid: string,
       senderName: string,
       content: string,
       images?: Buffer[],
     ): void {
-      webServer?.injectBridgedMessage(senderName, content, images);
+      webServer?.injectBridgedMessage(senderJid, senderName, content, images);
     },
 
     setQueued(sessionId: string, queued: boolean): void {

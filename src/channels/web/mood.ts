@@ -2,8 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
 import { countRecentMessages } from '../../db.js';
-import { getGroupFolder, getGroupJid, getTimezone } from './group-config.js';
 import {
+  getGroupFolder,
+  getGroupJid,
+  getTimezone,
+  getUserName,
+} from './group-config.js';
+import {
+  getCachedMoodStyle,
   regenerateMoodStyleAsync,
   shouldRegenerate,
   MoodBehavior,
@@ -128,7 +134,7 @@ function resolveActivityInterrupt(
 
   const override: ActivityOverride = {
     original_activity: scheduleActivity,
-    override_activity: `chatting with Michael, pulled away from ${core}`,
+    override_activity: `chatting with ${getUserName()}, pulled away from ${core}`,
     block_time: blockTime,
     created_at: new Date().toISOString(),
   };
@@ -174,6 +180,47 @@ export interface ResolvedMood {
   distribution?: Record<string, number>;
 }
 
+interface ScheduleDriftData {
+  current_phase?: string;
+  phase?: string;
+  energy_trend?: string;
+  social_level?: string;
+  morning_flexibility?: boolean;
+  late_night_mode?: boolean;
+  drift?: DriftModifiers;
+  sleep_drift_minutes?: number;
+  energy_delta?: number;
+  phase_bias?: string;
+  mood_bias?: Record<string, number>;
+  activity_anchor?: string;
+  current_anchor?: string;
+  current_food?: string;
+  current_drawing?: string;
+  current_media?: string;
+  domestic_state?: string;
+  apartment_detail?: string;
+  ddeok_state?: string;
+  ddeok_incident?: string;
+  unfinished_errand?: string;
+}
+
+interface DriftModifiers {
+  sleep_drift_minutes?: number;
+  energy_delta?: number;
+  phase_bias?: string;
+  mood_bias?: Record<string, number>;
+  activity_anchor?: string;
+  current_anchor?: string;
+  current_food?: string;
+  current_drawing?: string;
+  current_media?: string;
+  domestic_state?: string;
+  apartment_detail?: string;
+  ddeok_state?: string;
+  ddeok_incident?: string;
+  unfinished_errand?: string;
+}
+
 function moodPath(): string {
   return path.join(GROUPS_DIR, getGroupFolder(), 'mood.json');
 }
@@ -192,6 +239,37 @@ function readMoodFile(): MoodData {
 
 function writeMoodFile(data: MoodData): void {
   fs.writeFileSync(moodPath(), JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function scheduleContextPath(): string {
+  return path.join(GROUPS_DIR, getGroupFolder(), 'schedule_context.json');
+}
+
+function lifeStatePath(): string {
+  return path.join(GROUPS_DIR, getGroupFolder(), 'life_state.json');
+}
+
+function readJsonFile<T>(filePath: string): T | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
+  } catch {
+    return null;
+  }
+}
+
+function readScheduleDrift(): ScheduleDriftData | null {
+  const schedule = readJsonFile<ScheduleDriftData>(scheduleContextPath());
+  const life = readJsonFile<DriftModifiers>(lifeStatePath());
+  if (!schedule && !life) return null;
+  if (!life) return schedule;
+  return {
+    ...(schedule ?? {}),
+    drift: {
+      ...(schedule?.drift ?? {}),
+      ...life,
+    },
+  };
 }
 
 function getZurichTimeStr(): string {
@@ -239,6 +317,286 @@ function findActiveSlot(schedule: MoodScheduleSlot[]): MoodScheduleSlot | null {
   return active || daySlots[daySlots.length - 1];
 }
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function currentHour(): number {
+  return parseInt(
+    new Date().toLocaleTimeString('en-GB', {
+      timeZone: getTimezone(),
+      hour: '2-digit',
+      hour12: false,
+    }),
+    10,
+  );
+}
+
+function normalizeDistribution(
+  distribution: Record<string, number> | undefined,
+  fallbackMood: string,
+): Record<string, number> {
+  const source =
+    distribution && Object.keys(distribution).length > 0
+      ? distribution
+      : { [fallbackMood]: 100 };
+
+  const cleaned: Record<string, number> = {};
+  for (const [mood, weight] of Object.entries(source)) {
+    const rounded = Math.max(0, Math.round(weight));
+    if (rounded > 0) cleaned[mood] = rounded;
+  }
+
+  const entries = Object.entries(cleaned);
+  if (entries.length === 0) return { [fallbackMood]: 100 };
+
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  if (total <= 0) return { [fallbackMood]: 100 };
+
+  const normalized = entries.map(([mood, weight]) => ({
+    mood,
+    exact: (weight / total) * 100,
+  }));
+
+  const result: Record<string, number> = {};
+  let allocated = 0;
+  for (const item of normalized) {
+    const rounded = Math.floor(item.exact);
+    result[item.mood] = rounded;
+    allocated += rounded;
+  }
+
+  const remainder = 100 - allocated;
+  normalized
+    .sort((a, b) => (b.exact % 1) - (a.exact % 1))
+    .slice(0, remainder)
+    .forEach((item) => {
+      result[item.mood] += 1;
+    });
+
+  return Object.fromEntries(
+    Object.entries(result)
+      .filter(([, weight]) => weight > 0)
+      .sort((a, b) => b[1] - a[1]),
+  );
+}
+
+function addMoodWeight(
+  distribution: Record<string, number>,
+  mood: string,
+  amount: number,
+): void {
+  if (!mood || !Number.isFinite(amount) || amount === 0) return;
+  distribution[mood] = Math.max(0, (distribution[mood] ?? 0) + amount);
+}
+
+function applyMoodBiases(
+  baseDistribution: Record<string, number>,
+  baseMood: string,
+  drift: ScheduleDriftData | null,
+): Record<string, number> {
+  const adjusted = { ...baseDistribution };
+  if (!drift) return normalizeDistribution(adjusted, baseMood);
+
+  const phase = (
+    drift.current_phase ??
+    drift.phase ??
+    drift.drift?.phase_bias ??
+    drift.phase_bias ??
+    ''
+  ).toLowerCase();
+  const energyTrend = (drift.energy_trend ?? '').toLowerCase();
+  const socialLevel = (drift.social_level ?? '').toLowerCase();
+  const hour = currentHour();
+  const sleepDrift =
+    drift.drift?.sleep_drift_minutes ?? drift.sleep_drift_minutes ?? 0;
+
+  if (phase.includes('drawing')) {
+    addMoodWeight(adjusted, 'focused', 10);
+    addMoodWeight(adjusted, 'content', 4);
+  } else if (phase.includes('social')) {
+    addMoodWeight(adjusted, 'soft', 7);
+    addMoodWeight(adjusted, 'playful', 5);
+  } else if (phase.includes('free')) {
+    addMoodWeight(adjusted, 'restless', 5);
+    addMoodWeight(adjusted, 'content', 4);
+  }
+
+  if (
+    energyTrend.includes('low') ||
+    energyTrend.includes('drain') ||
+    energyTrend.includes('tired')
+  ) {
+    addMoodWeight(adjusted, 'tired', 10);
+    addMoodWeight(adjusted, 'soft', 4);
+  } else if (energyTrend.includes('high') || energyTrend.includes('good')) {
+    addMoodWeight(adjusted, 'happy', 6);
+    addMoodWeight(adjusted, 'excited', 4);
+  }
+
+  if (socialLevel.includes('selective')) {
+    addMoodWeight(adjusted, 'soft', 3);
+  } else if (socialLevel.includes('isolated')) {
+    addMoodWeight(adjusted, 'lonely', 6);
+    addMoodWeight(adjusted, 'wistful', 4);
+  }
+
+  if (drift.morning_flexibility && hour >= 6 && hour < 10) {
+    addMoodWeight(adjusted, 'tired', 7);
+    addMoodWeight(adjusted, 'soft', 3);
+  }
+
+  if (drift.late_night_mode && (hour >= 22 || hour < 2)) {
+    addMoodWeight(adjusted, 'playful', 5);
+    addMoodWeight(adjusted, 'tender', 4);
+  }
+
+  if (sleepDrift >= 30 && hour >= 6 && hour < 13) {
+    addMoodWeight(adjusted, 'tired', clamp(Math.round(sleepDrift / 8), 4, 14));
+    addMoodWeight(
+      adjusted,
+      'sleeping',
+      clamp(Math.round(sleepDrift / 20), 0, 6),
+    );
+  } else if (sleepDrift <= -30 && hour >= 6 && hour < 13) {
+    addMoodWeight(
+      adjusted,
+      'determined',
+      clamp(Math.round(Math.abs(sleepDrift) / 12), 3, 8),
+    );
+  }
+
+  const explicitMoodBias = drift.drift?.mood_bias ?? drift.mood_bias;
+  if (explicitMoodBias) {
+    for (const [mood, amount] of Object.entries(explicitMoodBias)) {
+      addMoodWeight(adjusted, mood, clamp(amount, -20, 20));
+    }
+  }
+
+  return normalizeDistribution(adjusted, baseMood);
+}
+
+function resolvePrimary(
+  distribution: Record<string, number>,
+  fallbackMood: string,
+): string {
+  return (
+    Object.entries(distribution).sort((a, b) => b[1] - a[1])[0]?.[0] ??
+    fallbackMood
+  );
+}
+
+function applyEnergyDrift(
+  baseEnergy: number,
+  drift: ScheduleDriftData | null,
+): number {
+  if (!drift) return baseEnergy;
+  const hour = currentHour();
+  const energyTrend = (drift.energy_trend ?? '').toLowerCase();
+  const sleepDrift =
+    drift.drift?.sleep_drift_minutes ?? drift.sleep_drift_minutes ?? 0;
+  const explicitDelta = drift.drift?.energy_delta ?? drift.energy_delta ?? 0;
+  let delta = clamp(explicitDelta, -2, 2);
+
+  if (
+    energyTrend.includes('low') ||
+    energyTrend.includes('drain') ||
+    energyTrend.includes('tired')
+  )
+    delta -= 1;
+  if (energyTrend.includes('high') || energyTrend.includes('good')) delta += 1;
+  if (sleepDrift >= 45 && hour >= 6 && hour < 13) delta -= 1;
+  if (sleepDrift <= -45 && hour >= 6 && hour < 13) delta += 1;
+  if (drift.late_night_mode && hour >= 22) delta += 1;
+
+  return clamp(baseEnergy + delta, 1, 10);
+}
+
+function compactAnchor(text: string | undefined): string | null {
+  if (!text || typeof text !== 'string') return null;
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return null;
+  return trimmed.length > 90 ? `${trimmed.slice(0, 87)}...` : trimmed;
+}
+
+function applyActivityDrift(
+  activity: string,
+  drift: ScheduleDriftData | null,
+): string {
+  if (!drift) return activity;
+  const d = drift.drift ?? {};
+  const anchors = [
+    d.activity_anchor ?? drift.activity_anchor,
+    d.current_anchor ?? drift.current_anchor,
+    d.current_food ?? drift.current_food,
+    d.current_drawing ?? drift.current_drawing,
+    d.current_media ?? drift.current_media,
+    d.domestic_state ?? drift.domestic_state,
+    d.apartment_detail ?? drift.apartment_detail,
+    d.ddeok_state ?? drift.ddeok_state,
+    d.ddeok_incident ?? drift.ddeok_incident,
+    d.unfinished_errand ?? drift.unfinished_errand,
+  ]
+    .map(compactAnchor)
+    .filter((anchor): anchor is string => Boolean(anchor));
+
+  const uniqueAnchors = [...new Set(anchors)]
+    .filter((anchor) => !activity.toLowerCase().includes(anchor.toLowerCase()))
+    .slice(0, 2);
+
+  if (uniqueAnchors.length === 0) return activity;
+  const base = activity.trim().replace(/[.。]+$/g, '');
+  return base
+    ? `${base}. current: ${uniqueAnchors.join('; ')}`
+    : uniqueAnchors.join('; ');
+}
+
+function maybeRegenerateResolvedMoodStyle(
+  distribution: Record<string, number> | undefined,
+  energy: number,
+): void {
+  if (!distribution || Object.keys(distribution).length === 0) return;
+  const cached = getCachedMoodStyle(getGroupFolder());
+  maybeRegenerateMoodStyle(cached?.distribution, distribution, energy);
+}
+
+function buildResolvedMood(opts: {
+  baseMood: string;
+  baseEnergy: number;
+  baseActivity: string;
+  updatedAt: string;
+  schedule: MoodScheduleSlot[];
+  distribution?: Record<string, number>;
+  applyDistributionDrift: boolean;
+}): ResolvedMood {
+  const drift = readScheduleDrift();
+  const activity = applyActivityDrift(opts.baseActivity, drift);
+  const baseDistribution = normalizeDistribution(
+    opts.distribution,
+    opts.baseMood,
+  );
+  const distribution = opts.applyDistributionDrift
+    ? applyMoodBiases(baseDistribution, opts.baseMood, drift)
+    : baseDistribution;
+  const energy = opts.applyDistributionDrift
+    ? applyEnergyDrift(opts.baseEnergy, drift)
+    : opts.baseEnergy;
+  const currentMood = resolvePrimary(distribution, opts.baseMood);
+
+  if (opts.applyDistributionDrift) {
+    maybeRegenerateResolvedMoodStyle(distribution, energy);
+  }
+
+  return {
+    current_mood: currentMood,
+    energy,
+    activity,
+    updated_at: opts.updatedAt,
+    schedule: opts.schedule,
+    distribution,
+  };
+}
+
 /**
  * Resolve current mood.
  * - If the agent overrode mood via tag within the last 15 minutes, use that override.
@@ -258,37 +616,40 @@ export function resolveMood(): ResolvedMood {
   if (data.updated_at) {
     const overrideAge = Date.now() - new Date(data.updated_at).getTime();
     if (overrideAge < OVERRIDE_WINDOW_MS && overrideAge >= 0) {
-      return {
-        current_mood: data.current_mood,
-        energy: data.energy,
-        activity,
-        updated_at: data.updated_at,
+      return buildResolvedMood({
+        baseMood: data.current_mood,
+        baseEnergy: data.energy,
+        baseActivity: activity,
+        updatedAt: data.updated_at,
         schedule: data.schedule,
         distribution: data.distribution,
-      };
+        applyDistributionDrift: false,
+      });
     }
   }
 
   // Override expired — revert to schedule (including schedule-level distribution)
   if (slot) {
-    return {
-      current_mood: slot.mood,
-      energy: slot.energy,
-      activity,
-      updated_at: data.updated_at,
+    return buildResolvedMood({
+      baseMood: slot.mood,
+      baseEnergy: slot.energy,
+      baseActivity: activity,
+      updatedAt: data.updated_at,
       schedule: data.schedule,
       distribution: slot.distribution,
-    };
+      applyDistributionDrift: true,
+    });
   }
 
-  return {
-    current_mood: data.current_mood,
-    energy: data.energy,
-    activity: '',
-    updated_at: data.updated_at,
+  return buildResolvedMood({
+    baseMood: data.current_mood,
+    baseEnergy: data.energy,
+    baseActivity: '',
+    updatedAt: data.updated_at,
     schedule: data.schedule,
     distribution: data.distribution,
-  };
+    applyDistributionDrift: true,
+  });
 }
 
 /** Regex for distribution format: *[mood:chill:40,focused:30,hungry:30:6]* */
