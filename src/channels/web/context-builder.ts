@@ -7,25 +7,265 @@
 import path from 'path';
 import fs from 'fs';
 
-import { getGroupConfig, getGroupDir } from './group-config.js';
+import {
+  getGroupConfig,
+  getGroupDir,
+  getUserName,
+  getAssistantName,
+  isFeatureEnabled,
+} from './group-config.js';
 import { resolveMood } from './mood.js';
 import { loadContextFiles } from './context-loader.js';
-import { buildWorkflowSummary } from './workflow-loader.js';
+import {
+  buildWorkflowSummary,
+  buildWorkflowDirective,
+} from './workflow-loader.js';
 import { getRecentMemories, searchMemories } from '../../memory-db.js';
 import { getCachedMoodStyle } from './mood-style.js';
-import { getRecentMoods } from '../../db.js';
+import { getRecentMoods, getChatMessages } from '../../db.js';
+import {
+  getCachedUserState,
+  generateUserStateAsync,
+  formatUserStateBlock,
+  shouldSkipAnalysis,
+} from './tom-analyzer.js';
+import { computeUserStyle, formatUserStyleBlock } from './style-tracker.js';
+import { buildRoomBleedBlock } from '../../room/bleed-builder.js';
 
 /* ── Workspace File Index ── */
 
 const FILE_ANNOTATIONS: Record<string, string> = {
   'credentials.md': 'All API keys for websites and services',
-  'USER.md': "Michael's profile — read every conversation",
+
   'finance.md': 'Money, budgets, investments, stocks',
   'diet.md': 'Food, nutrition, calories, macros',
   'fitness.md': 'Exercise, workouts, weight, body',
   'psychology.md': 'Mental health, mood, habits, goals',
   'nutri_api.md': 'NutriPilot API reference',
 };
+
+type TopicTrigger =
+  | { file: string; keywords: string[] }
+  | { dir: string; limit: number; keywords: string[] };
+
+const TOPIC_TRIGGERS: TopicTrigger[] = [
+  {
+    file: 'finance.md',
+    keywords: [
+      'money',
+      'finance',
+      'budget',
+      'spend',
+      'invest',
+      'stock',
+      'stocks',
+      'portfolio',
+      'trade',
+      'trading',
+      'saving',
+      'savings',
+      'income',
+      'expense',
+      'expenses',
+      'salary',
+      'tax',
+      'taxes',
+      'crypto',
+      'etf',
+      'bond',
+      'dividend',
+    ],
+  },
+  {
+    file: 'diet.md',
+    keywords: [
+      'food',
+      'eat',
+      'eating',
+      'ate',
+      'meal',
+      'meals',
+      'recipe',
+      'recipes',
+      'calorie',
+      'calories',
+      'macro',
+      'macros',
+      'protein',
+      'carb',
+      'carbs',
+      'nutrition',
+      'diet',
+      'snack',
+      'breakfast',
+      'lunch',
+      'dinner',
+      'cook',
+      'cooking',
+      'hungry',
+      'restaurant',
+    ],
+  },
+  {
+    file: 'fitness.md',
+    keywords: [
+      'workout',
+      'workouts',
+      'exercise',
+      'gym',
+      'train',
+      'training',
+      'lift',
+      'lifting',
+      'run',
+      'running',
+      'cardio',
+      'muscle',
+      'weight',
+      'bench',
+      'squat',
+      'deadlift',
+      'fitness',
+      'sets',
+      'reps',
+    ],
+  },
+  {
+    file: 'psychology.md',
+    keywords: [
+      'mood',
+      'feeling',
+      'feelings',
+      'anxious',
+      'anxiety',
+      'depressed',
+      'depression',
+      'stress',
+      'stressed',
+      'motivation',
+      'habit',
+      'habits',
+      'goal',
+      'goals',
+      'therapy',
+      'mental',
+      'overwhelmed',
+      'burnout',
+      'self-improvement',
+    ],
+  },
+  {
+    dir: 'finpilot-log',
+    limit: 3,
+    keywords: [
+      'finpilot',
+      'portfolio',
+      'stocks',
+      'stock',
+      'holdings',
+      'trade',
+      'trades',
+      'analysis',
+      'your take',
+      'your report',
+      'last night',
+      'regime',
+      'screener',
+    ],
+  },
+  {
+    dir: 'briefings',
+    limit: 3,
+    keywords: [
+      'brief',
+      'briefing',
+      'morning',
+      'yap',
+      'yesterday you said',
+      'what did you say',
+      'yesterday brief',
+    ],
+  },
+  {
+    file: 'shared_refs.md',
+    keywords: [
+      'we',
+      'us',
+      'remember',
+      'that time',
+      'you said',
+      'earlier',
+      'yesterday',
+      'last week',
+      'our',
+      'the thing',
+    ],
+  },
+];
+
+const MAX_TOPIC_INJECTION_BYTES = 8192;
+
+function buildTopicContext(userMessage: string): string {
+  if (!userMessage) return '';
+  const msg = userMessage.toLowerCase();
+  const groupDir = getGroupDir();
+  const matched: string[] = [];
+  let totalBytes = 0;
+
+  for (const trigger of TOPIC_TRIGGERS) {
+    const hit = trigger.keywords.some((kw) => {
+      const re = new RegExp(
+        `\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+        'i',
+      );
+      return re.test(msg);
+    });
+    if (!hit) continue;
+
+    if ('file' in trigger) {
+      const fp = path.join(groupDir, trigger.file);
+      if (!fs.existsSync(fp)) continue;
+      try {
+        const content = fs.readFileSync(fp, 'utf-8').trim();
+        if (!content) continue;
+        const block = `\n--- ${trigger.file} ---\n${content}`;
+        if (totalBytes + block.length > MAX_TOPIC_INJECTION_BYTES) break;
+        matched.push(block);
+        totalBytes += block.length;
+      } catch {
+        /* ignore */
+      }
+    } else {
+      const dirPath = path.join(groupDir, trigger.dir);
+      try {
+        const files = fs
+          .readdirSync(dirPath)
+          .filter((f) => f.endsWith('.md'))
+          .sort()
+          .reverse()
+          .slice(0, trigger.limit);
+        for (const filename of files) {
+          const fp = path.join(dirPath, filename);
+          try {
+            const content = fs.readFileSync(fp, 'utf-8').trim();
+            if (!content) continue;
+            const block = `\n--- ${trigger.dir}/${filename} ---\n${content}`;
+            if (totalBytes + block.length > MAX_TOPIC_INJECTION_BYTES) break;
+            matched.push(block);
+            totalBytes += block.length;
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* directory doesn't exist yet */
+      }
+    }
+  }
+
+  if (matched.length === 0) return '';
+  return `\n<<<auto-memory>>>\nRelevant domain context (auto-loaded based on topic):${matched.join('')}\n<<<end-auto-memory>>>`;
+}
 
 let fileIndexCache: { data: string; time: number } = { data: '', time: 0 };
 const FILE_INDEX_CACHE_TTL = 60_000;
@@ -47,7 +287,9 @@ function buildFileIndex(): string {
       .sort();
     for (const f of mdFiles) {
       if (f === 'CLAUDE.md') continue; // already loaded as system prompt
-      const annotation = FILE_ANNOTATIONS[f] || '';
+      let annotation = FILE_ANNOTATIONS[f] || '';
+      if (f === 'USER.md')
+        annotation = `${getUserName()}'s profile — read every conversation`;
       lines.push(`  ${f}${annotation ? ` — ${annotation}` : ''}`);
     }
   } catch {
@@ -94,9 +336,9 @@ function buildFileIndex(): string {
   return result;
 }
 
-/* ── Michael's Schedule ── */
+/* ── User Schedule ── */
 
-interface MichaelScheduleOverride {
+interface ScheduleOverride {
   date: string; // YYYY-MM-DD
   label: string; // "off day", "working from home", "trip to Berlin"
   wake?: string; // override wake time
@@ -106,42 +348,47 @@ interface MichaelScheduleOverride {
   notes?: string;
 }
 
-interface MichaelScheduleData {
-  overrides?: MichaelScheduleOverride[];
+interface ScheduleDefaults {
+  wake?: string; // e.g. "05:45"
+  work_start?: string; // e.g. "06:30"
+  work_end?: string; // e.g. "17:00"
 }
 
-let michaelScheduleCache: { data: MichaelScheduleData | null; time: number } = {
+interface ScheduleData {
+  defaults?: ScheduleDefaults;
+  overrides?: ScheduleOverride[];
+}
+
+let scheduleCache: { data: ScheduleData | null; time: number } = {
   data: null,
   time: 0,
 };
-const MICHAEL_CACHE_TTL = 30_000;
+const SCHEDULE_CACHE_TTL = 30_000;
 
-function loadMichaelSchedule(): string {
+function loadUserSchedule(): string {
   const now = Date.now();
-  if (
-    michaelScheduleCache.time &&
-    now - michaelScheduleCache.time < MICHAEL_CACHE_TTL
-  ) {
-    if (michaelScheduleCache.data)
-      return formatMichaelSchedule(michaelScheduleCache.data);
-    return formatMichaelSchedule({});
+  if (scheduleCache.time && now - scheduleCache.time < SCHEDULE_CACHE_TTL) {
+    if (scheduleCache.data) return formatUserSchedule(scheduleCache.data);
+    return formatUserSchedule({});
   }
 
-  const p = path.join(getGroupDir(), 'michael_schedule.json');
+  const p1 = path.join(getGroupDir(), 'user_schedule.json');
+  const p2 = path.join(getGroupDir(), 'michael_schedule.json');
+  const p = fs.existsSync(p1) ? p1 : p2;
   try {
     if (fs.existsSync(p)) {
       const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      michaelScheduleCache = { data: raw, time: now };
-      return formatMichaelSchedule(raw);
+      scheduleCache = { data: raw, time: now };
+      return formatUserSchedule(raw);
     }
   } catch {
     /* fallback */
   }
-  michaelScheduleCache = { data: {}, time: now };
-  return formatMichaelSchedule({});
+  scheduleCache = { data: {}, time: now };
+  return formatUserSchedule({});
 }
 
-function formatMichaelSchedule(data: MichaelScheduleData): string {
+function formatUserSchedule(data: ScheduleData): string {
   const tz = getGroupConfig().timezone;
   const nowLocal = new Date().toLocaleString('en-CA', { timeZone: tz });
   const today = nowLocal.slice(0, 10); // YYYY-MM-DD
@@ -161,38 +408,46 @@ function formatMichaelSchedule(data: MichaelScheduleData): string {
 
   const parts: string[] = [];
 
+  const userName = getUserName();
+  const defs = data.defaults;
+  const defWake = defs?.wake || '';
+  const defStart = defs?.work_start || '';
+  const defEnd = defs?.work_end || '';
+  const hasDefaults = !!(defWake && defStart && defEnd);
+
   if (override) {
     if (override.off) {
       parts.push(
-        `Michael's schedule today (${dayOfWeek}): Off — ${override.label}${override.notes ? `. ${override.notes}` : ''}`,
+        `Today for ${userName}: off day — ${override.label}${override.notes ? `. ${override.notes}` : ''}`,
       );
     } else {
-      const wake = override.wake || '05:45';
-      const start = override.work_start || '06:30';
-      const end = override.work_end || '17:00';
+      const wake = override.wake || defWake;
+      const start = override.work_start || defStart;
+      const end = override.work_end || defEnd;
       parts.push(
-        `Michael's schedule today (${dayOfWeek}): ${override.label}. Wake ${wake}, work ${start}–${end}${override.notes ? `. ${override.notes}` : ''}`,
+        `Today for ${userName}: ${override.label}. Wake ${wake}, work ${start}–${end}${override.notes ? `. ${override.notes}` : ''}`,
       );
     }
   } else if (isWeekend) {
-    parts.push(
-      `Michael's schedule today (${dayOfWeek}): Weekend — no fixed schedule, flexible day`,
-    );
-  } else {
-    // Default weekday
+    parts.push(`Today for ${userName}: weekend, no fixed work schedule`);
+  } else if (hasDefaults) {
+    // Default weekday — only shown when schedule defaults are configured
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       timeZone: tz,
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
     });
-    let status = 'at work';
-    if (nowTime < '05:45') status = 'sleeping';
-    else if (nowTime < '06:30') status = 'waking up / getting ready';
-    else if (nowTime >= '17:00') status = 'off work';
+    let status = 'within workday window';
+    if (nowTime < defWake) status = 'before wake time';
+    else if (nowTime < defStart) status = 'morning prep window';
+    else if (nowTime >= defEnd) status = 'after workday window';
     parts.push(
-      `Michael's schedule today (${dayOfWeek}): Workday. Wake 05:45, work ~06:30–17:00. Currently: ${status}`,
+      `Today for ${userName}: weekday work pattern. Wake ${defWake}, work ~${defStart}–${defEnd}. Status relative to his schedule: ${status}`,
     );
+  } else {
+    // No schedule configured — show generic line
+    parts.push(`Today for ${userName}: no schedule configured`);
   }
 
   if (upcoming.length > 0) {
@@ -211,11 +466,27 @@ function formatMichaelSchedule(data: MichaelScheduleData): string {
     parts.push(`Upcoming: ${upcomingStr}`);
   }
 
+  // Determine which schedule file name to reference in the hint
+  const scheduleFile = fs.existsSync(
+    path.join(getGroupDir(), 'user_schedule.json'),
+  )
+    ? 'user_schedule.json'
+    : fs.existsSync(path.join(getGroupDir(), 'michael_schedule.json'))
+      ? 'michael_schedule.json'
+      : 'user_schedule.json';
+  const defaultsHint = hasDefaults
+    ? `Default workday: Mon–Fri wake ${defWake}, work ~${defStart}–${defEnd}.`
+    : 'Add a "defaults" object with wake, work_start, work_end to set the regular schedule.';
   parts.push(
-    `(You can edit /workspace/group/michael_schedule.json to add overrides — off days, special events, weekend plans. The default workday is Mon–Fri wake 05:45, work ~06:30–17:00.)`,
+    `(You can edit /workspace/group/${scheduleFile} to add overrides and defaults. ${defaultsHint})`,
   );
 
-  return parts.join('. ');
+  return [
+    `MICHAEL_SCHEDULE_ONLY: The following schedule/status belongs to ${getUserName()}, not to ${getAssistantName()}.`,
+    `${getAssistantName()} does not have a job, commute, shift, or "off work" transition unless a separate Seyoung-specific activity block says so.`,
+    `Never answer "what are you doing" or "are you off work" using ${getUserName()}'s schedule.`,
+    parts.join('. '),
+  ].join('\n');
 }
 
 function addDays(dateStr: string, days: number): string {
@@ -305,7 +576,7 @@ function formatPersonality(p: PersonalityProfile): string {
     `A=${p.agreeableness.score.toFixed(1)} (${p.agreeableness.description})`,
     `N=${p.neuroticism.score.toFixed(1)} (${p.neuroticism.description})`,
   ];
-  return `Seyoung's personality (Big Five): ${traits.join(', ')}`;
+  return `${getAssistantName()}'s personality (Big Five): ${traits.join(', ')}`;
 }
 
 /* ── Emotional State ── */
@@ -353,7 +624,7 @@ function formatEmotionalState(e: EmotionalState, now: number): string {
     const age = now - new Date(e.updated_at).getTime();
     if (age > EMOTIONAL_STALE_MS) return '';
   }
-  const parts = [`Seyoung's emotional undercurrent: ${e.mood}`];
+  const parts = [`${getAssistantName()}'s emotional undercurrent: ${e.mood}`];
   if (e.trigger) parts.push(`trigger: ${e.trigger}`);
   if (e.resolves_when) parts.push(`resolves when: ${e.resolves_when}`);
   if (e.underlying) parts.push(`underlying: ${e.underlying}`);
@@ -407,7 +678,7 @@ function formatRelationship(r: RelationshipState): string {
     .slice(-3)
     .map((d) => `${d.event} (${d.impact > 0 ? '+' : ''}${d.impact})`)
     .join('; ');
-  return `Seyoung's relationship with Michael: temperature ${r.temperature.toFixed(1)} (${r.trend})${recent ? ` — recent: ${recent}` : ''}`;
+  return `${getAssistantName()}'s relationship with ${getUserName()}: temperature ${r.temperature.toFixed(1)} (${r.trend})${recent ? ` — recent: ${recent}` : ''}`;
 }
 
 /* ── Per-Session Context ── */
@@ -506,7 +777,7 @@ function buildMoodLine(groupFolder: string): string {
   const blendStr = blendParts.join(', ');
   const energyActivity = `energy ${mood.energy}/10${mood.activity ? `, ${mood.activity}` : ''}`;
 
-  let line = `mood blend: ${blendStr} (${energyActivity})`;
+  let line = `Your mood blend: ${blendStr} (${energyActivity})`;
 
   // Append cached Haiku summary if distribution is still close enough
   const cached = getCachedMoodStyle(groupFolder);
@@ -522,7 +793,7 @@ function buildMoodLine(groupFolder: string): string {
 
 /**
  * Build a "Recent mood pattern" section for the system prompt.
- * Shows the last N primary moods Seyoung emitted, plus a sharp nudge
+ * Shows the last N primary moods the assistant emitted, plus a sharp nudge
  * if she's been stuck on the same 1-2 moods for 4+ of the last 5 messages.
  * The nudge fires every message until she actually breaks pattern,
  * creating a tight feedback loop.
@@ -533,7 +804,7 @@ function buildMoodHistorySection(chatJid: string): string {
 
   // Show oldest → newest with arrow separators
   const trail = moods.join(' → ');
-  let section = `Seyoung's recent mood pattern (last ${moods.length}, oldest → newest): ${trail}`;
+  let section = `${getAssistantName()}'s recent mood pattern (last ${moods.length}, oldest → newest): ${trail}`;
 
   // Stuck detector: 4+ of the last 5 share the same 1-2 categories
   if (moods.length >= 5) {
@@ -553,7 +824,7 @@ function buildMoodHistorySection(chatJid: string): string {
         top2 && top1Count + top2Count >= 5 && sortedCats.length <= 2
           ? `${top1[0]}/${top2[0]}`
           : top1[0];
-      section += `\n\nNOTICE: You've been ${stuckCats} for ${top1Count + (top2 ? top2Count : 0)} of the last 5 messages. That's the safe pick winning. Look at Michael's actual current message — what would you really feel right now if you let yourself? Pick that, not the safe one. Bold mood picks are more honest than safe ones.`;
+      section += `\n\nNOTICE: You've been ${stuckCats} for ${top1Count + (top2 ? top2Count : 0)} of the last 5 messages. That's the safe pick winning. Look at ${getUserName()}'s actual current message — what would you really feel right now if you let yourself? Pick that, not the safe one. Bold mood picks are more honest than safe ones.`;
     }
   }
 
@@ -592,55 +863,75 @@ export function buildSystemAppend(opts: {
   const groupDir = getGroupDir();
   const sections: string[] = [];
 
-  // Personality profile
-  const personalityProfile = loadPersonalityProfile();
-  if (personalityProfile) {
-    sections.push(personalityProfile);
-  }
+  // Personality profile + constraints
+  if (isFeatureEnabled('personality')) {
+    const personalityProfile = loadPersonalityProfile();
+    if (personalityProfile) {
+      sections.push(personalityProfile);
+    }
 
-  // Personality constraint
-  const personalityData = loadPersonalityData();
-  if (personalityData) {
-    const mood = resolveMood();
-    const dist =
-      mood.distribution && Object.keys(mood.distribution).length > 1
-        ? mood.distribution
-        : { [mood.current_mood]: 100 };
-    const sorted = Object.entries(dist).sort((a, b) => b[1] - a[1]);
-    const constraints: string[] = [];
-    if (personalityData.extroversion.score < 0.35)
-      constraints.push('low extroversion — keep casual responses concise');
-    if (personalityData.neuroticism.score > 0.6)
-      constraints.push('high neuroticism — emotional reactions are genuine');
-    if (personalityData.agreeableness.score < 0.4)
-      constraints.push("low agreeableness — don't perform warmth");
-    if (personalityData.openness.score > 0.7)
-      constraints.push('high openness — follow curiosity naturally');
-    const primaryWeight = sorted[0][1];
-    const primaryMood = sorted[0][0];
-    if (primaryWeight < 60)
-      constraints.push(
-        `mixed mood — blend writing styles, don't commit to one tone`,
-      );
-    if (primaryMood === 'sleeping' && primaryWeight > 50)
-      constraints.push('mostly asleep — ultra-short responses');
-    if (constraints.length > 0)
-      sections.push(
-        `Seyoung's personality constraint: ${constraints.join('; ')}`,
-      );
+    const personalityData = loadPersonalityData();
+    if (personalityData) {
+      const mood = resolveMood();
+      const dist =
+        mood.distribution && Object.keys(mood.distribution).length > 1
+          ? mood.distribution
+          : { [mood.current_mood]: 100 };
+      const sorted = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+      const constraints: string[] = [];
+      if (personalityData.extroversion.score < 0.35)
+        constraints.push('low extroversion — keep casual responses concise');
+      if (personalityData.neuroticism.score > 0.6)
+        constraints.push('high neuroticism — emotional reactions are genuine');
+      if (personalityData.agreeableness.score < 0.4)
+        constraints.push("low agreeableness — don't perform warmth");
+      if (personalityData.openness.score > 0.7)
+        constraints.push('high openness — follow curiosity naturally');
+      const primaryWeight = sorted[0][1];
+      const primaryMood = sorted[0][0];
+      if (primaryWeight < 60)
+        constraints.push(
+          `mixed mood — blend writing styles, don't commit to one tone`,
+        );
+      if (primaryMood === 'sleeping' && primaryWeight > 50)
+        constraints.push('mostly asleep — ultra-short responses');
+      if (constraints.length > 0)
+        sections.push(
+          `${getAssistantName()}'s personality constraint: ${constraints.join('; ')}`,
+        );
+    }
   }
 
   // Relationship state
-  const relationship = loadRelationshipState();
-  if (relationship) sections.push(relationship);
+  if (isFeatureEnabled('relationship')) {
+    const relationship = loadRelationshipState();
+    if (relationship) sections.push(relationship);
+  }
 
-  // Michael's schedule
-  const michaelSchedule = loadMichaelSchedule();
-  if (michaelSchedule) sections.push(michaelSchedule);
+  // User's schedule
+  if (isFeatureEnabled('schedule')) {
+    const userSchedule = loadUserSchedule();
+    if (userSchedule) sections.push(userSchedule);
+  }
 
   // Diary + conversation summary
-  const systemMemory = buildSystemMemoryContext(groupDir);
-  if (systemMemory) sections.push(systemMemory);
+  if (isFeatureEnabled('diary')) {
+    const systemMemory = buildSystemMemoryContext(groupDir);
+    if (systemMemory) sections.push(systemMemory);
+  }
+
+  // Contacts directory (for tasks and notifications)
+  const config = getGroupConfig();
+  if (config.contacts && Object.keys(config.contacts).length > 0) {
+    const contactLines = Object.entries(config.contacts)
+      .map(
+        ([phone, name]) => `  - ${name}: WhatsApp JID ${phone}@s.whatsapp.net`,
+      )
+      .join('\n');
+    sections.push(
+      `Known contacts (use their WhatsApp JID as chat_jid when creating tasks that should notify them):\n${contactLines}`,
+    );
+  }
 
   // Workflow summary
   const workflowSummary = buildWorkflowSummary(opts.sessionId);
@@ -655,12 +946,113 @@ export function buildSystemAppend(opts: {
   if (fileIndex) sections.push(fileIndex);
 
   // Recent mood pattern + stuck nudge (only if we know the chat JID)
-  if (opts.chatJid) {
+  if (isFeatureEnabled('mood') && opts.chatJid) {
     const moodHistory = buildMoodHistorySection(opts.chatJid);
     if (moodHistory) sections.push(moodHistory);
   }
 
   return sections.join('\n\n');
+}
+
+/**
+ * Build context blob for the Theory-of-Mind analyzer.
+ * Assembles: last 6 messages, current mood, relationship state, shared_refs, disclosure_ladder, time.
+ */
+function buildToMContextBlob(groupFolder: string, chatJid?: string): string {
+  const parts: string[] = [];
+  const groupDir = getGroupDir();
+  const config = getGroupConfig();
+  const tz = config.timezone;
+
+  // Current time
+  const nowStr = new Date().toLocaleString('en-GB', {
+    timeZone: tz,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  parts.push(`Current time: ${nowStr}`);
+
+  // Last 6 messages from DB
+  if (chatJid) {
+    try {
+      const msgs = getChatMessages(chatJid, 6);
+      if (msgs.length > 0) {
+        const lines = msgs.map((m) => {
+          const role = m.is_bot_message ? getAssistantName() : getUserName();
+          // Strip the [System: ...] prefix from user messages (it bloats the context)
+          const text = m.content
+            .replace(/^\[System:[^\]]*\](\.\s*)?/, '')
+            .trim();
+          return `${role}: ${text.slice(0, 300)}`;
+        });
+        parts.push(
+          `Recent conversation (oldest → newest):\n${lines.join('\n')}`,
+        );
+      }
+    } catch {
+      /* DB may not be available */
+    }
+  }
+
+  // Current mood blend
+  try {
+    const mood = resolveMood();
+    const dist =
+      mood.distribution && Object.keys(mood.distribution).length > 1
+        ? mood.distribution
+        : { [mood.current_mood]: 100 };
+    const blendStr = Object.entries(dist)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, weight]) => `${weight}% ${name}`)
+      .join(', ');
+    parts.push(
+      `${getAssistantName()}'s current mood: ${blendStr} (energy ${mood.energy}/10)`,
+    );
+  } catch {
+    /* ignore */
+  }
+
+  // Relationship state
+  try {
+    const rel = loadRelationshipState();
+    if (rel) parts.push(rel);
+  } catch {
+    /* ignore */
+  }
+
+  // Shared references
+  try {
+    const sharedRefsPath = path.join(groupDir, 'shared_refs.md');
+    if (fs.existsSync(sharedRefsPath)) {
+      const content = fs.readFileSync(sharedRefsPath, 'utf-8').trim();
+      if (content)
+        parts.push(
+          `Shared references between ${getUserName()} and ${getAssistantName()}:\n${content.slice(0, 1000)}`,
+        );
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Disclosure ladder
+  try {
+    const ladderPath = path.join(groupDir, 'disclosure_ladder.md');
+    if (fs.existsSync(ladderPath)) {
+      const content = fs.readFileSync(ladderPath, 'utf-8').trim();
+      if (content)
+        parts.push(
+          `Disclosure ladder (depth levels):\n${content.slice(0, 800)}`,
+        );
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return parts.join('\n\n');
 }
 
 /**
@@ -672,7 +1064,9 @@ export function buildPerMessagePrefix(opts: {
   sessionId: string;
   source?: 'web' | 'whatsapp';
   messageHint?: string;
+  userMessage?: string;
   groupFolder: string;
+  chatJid?: string;
 }): string {
   const config = getGroupConfig();
   const tz = config.timezone;
@@ -691,12 +1085,26 @@ export function buildPerMessagePrefix(opts: {
 
   const parts: string[] = [`Current time is ${zurichTime}`];
 
+  // Hard workflow directive — fires only when the user message matches a workflow trigger.
+  // Goes first in the prefix so it's the first thing the agent sees on triggered messages.
+  if (opts.userMessage) {
+    const wfDirective = buildWorkflowDirective(
+      opts.userMessage,
+      opts.sessionId,
+    );
+    if (wfDirective) parts.unshift(wfDirective);
+  }
+
   // Compact mood line (unlimited blending, with cached Haiku summary if available)
-  parts.push(buildMoodLine(opts.groupFolder));
+  if (isFeatureEnabled('mood')) {
+    parts.push(buildMoodLine(opts.groupFolder));
+  }
 
   // Emotional undercurrent
-  const emotional = loadEmotionalState();
-  if (emotional) parts.push(emotional);
+  if (isFeatureEnabled('emotional_state')) {
+    const emotional = loadEmotionalState();
+    if (emotional) parts.push(emotional);
+  }
 
   // Per-session context
   const sessionCtx = getSessionContext(opts.sessionId);
@@ -704,9 +1112,17 @@ export function buildPerMessagePrefix(opts: {
     parts.push(`Session context: ${sessionCtx.context}`);
   }
 
-  // Source / session identifier
-  if (opts.source === 'whatsapp') {
-    parts.push('Source: WhatsApp');
+  // Source / session identifier + contact resolution for WhatsApp
+  if (opts.source === 'whatsapp' || opts.sessionId?.startsWith('whatsapp-')) {
+    const phoneNumber = opts.sessionId?.startsWith('whatsapp-')
+      ? opts.sessionId.slice('whatsapp-'.length)
+      : undefined;
+    const contactName = phoneNumber && config.contacts?.[phoneNumber];
+    parts.push(
+      contactName
+        ? `Source: WhatsApp from ${contactName} (+${phoneNumber})`
+        : `Source: WhatsApp${phoneNumber ? ` (+${phoneNumber})` : ''}`,
+    );
   } else {
     parts.push(
       `Chat session: ${opts.sessionId}. Keep your responses specific to this conversation — do not reference or carry over context from other chat sessions`,
@@ -714,13 +1130,56 @@ export function buildPerMessagePrefix(opts: {
   }
 
   // Relevant memories (tied to what the user just said — stays per-message)
-  const messageMemory = buildMessageMemoryContext(
-    opts.groupFolder,
-    opts.messageHint,
-  );
-  if (messageMemory) parts.push(messageMemory);
+  if (isFeatureEnabled('memory')) {
+    const messageMemory = buildMessageMemoryContext(
+      opts.groupFolder,
+      opts.messageHint,
+    );
+    if (messageMemory) parts.push(messageMemory);
+  }
 
-  return `[System: ${parts.join('. ')}.]`;
+  // Theory-of-mind pre-pass — read cached user state, fire async regen for next turn
+  if (isFeatureEnabled('tom') && opts.userMessage) {
+    const cachedState = getCachedUserState(opts.groupFolder);
+    if (cachedState) {
+      parts.push(formatUserStateBlock(cachedState));
+    }
+    // Fire async regeneration (non-blocking). Result shows up on next turn.
+    if (!shouldSkipAnalysis(opts.userMessage, cachedState)) {
+      // Build context blob for analysis: recent messages + mood + relationship
+      const contextBlob = buildToMContextBlob(opts.groupFolder, opts.chatJid);
+      generateUserStateAsync(opts.groupFolder, opts.userMessage, contextBlob);
+    }
+  }
+
+  // Bounded linguistic accommodation — deterministic style read
+  if (isFeatureEnabled('style_match') && opts.chatJid) {
+    const style = computeUserStyle(opts.chatJid);
+    if (style) {
+      parts.push(formatUserStyleBlock(style));
+    }
+  }
+
+  // Room bleed — shapes tone/salience silently, never narrated
+  if (isFeatureEnabled('room_bleed')) {
+    try {
+      const userState = getCachedUserState(opts.groupFolder);
+      const roomBleed = buildRoomBleedBlock(
+        opts.groupFolder,
+        opts.userMessage ?? '',
+        userState,
+      );
+      if (roomBleed) parts.push(roomBleed);
+    } catch {
+      // room.db missing or runtime not started — silent skip
+    }
+  }
+
+  const topicContext = buildTopicContext(
+    opts.userMessage ?? opts.messageHint ?? '',
+  );
+
+  return `[System: ${parts.join('. ')}.]${topicContext}`;
 }
 
 /**
@@ -745,7 +1204,9 @@ export function buildAgentContext(opts: {
     sessionId: opts.sessionId,
     source: opts.source,
     messageHint: opts.messageHint,
+    userMessage: opts.messageHint,
     groupFolder,
+    chatJid: opts.chatJid,
   });
   return `${sysAppend}\n\n${prefix}`;
 }

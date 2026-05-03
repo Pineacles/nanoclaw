@@ -245,6 +245,32 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Add feature column to scheduled_tasks (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN feature TEXT DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add decision_mode, workflow_ref, reference_files, run_as columns (migration for existing DBs)
+  const columnsToAdd = [
+    `ALTER TABLE scheduled_tasks ADD COLUMN decision_mode INTEGER DEFAULT 0`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN workflow_ref TEXT`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN reference_files TEXT`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN run_as TEXT DEFAULT 'default'`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN model TEXT DEFAULT NULL`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN room_read_level TEXT DEFAULT NULL`,
+  ];
+  for (const sql of columnsToAdd) {
+    try {
+      database.exec(sql);
+    } catch {
+      /* already exists */
+    }
+  }
 }
 
 export function initDatabase(): void {
@@ -504,6 +530,27 @@ export function getRecentMoods(chatJid: string, limit: number = 8): string[] {
   return rows.map((r) => r.mood);
 }
 
+/**
+ * Return the last N non-bot message contents for a chat, oldest → newest.
+ * Used by style-tracker for deterministic style computation.
+ */
+export function getRecentUserMessages(
+  chatJid: string,
+  limit: number = 8,
+): string[] {
+  const sql = `
+    SELECT content FROM (
+      SELECT content, timestamp FROM messages
+      WHERE chat_jid = ? AND is_bot_message = 0
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+  const rows = db.prepare(sql).all(chatJid, limit) as { content: string }[];
+  return rows.map((r) => r.content);
+}
+
 /** Count non-bot messages in a chat since a given timestamp */
 export function countRecentMessages(
   chatJid: string,
@@ -536,8 +583,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at, title)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at, title, decision_mode, workflow_ref, reference_files, run_as, model)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -552,6 +599,11 @@ export function createTask(
     task.status,
     task.created_at,
     task.title || '',
+    task.decision_mode ?? 0,
+    task.workflow_ref || null,
+    task.reference_files || null,
+    task.run_as || 'default',
+    task.model || null,
   );
 
   // Auto-generate a title via Haiku if none was supplied
@@ -601,6 +653,11 @@ export function updateTask(
       | 'status'
       | 'context_mode'
       | 'title'
+      | 'decision_mode'
+      | 'workflow_ref'
+      | 'reference_files'
+      | 'run_as'
+      | 'model'
     >
   >,
 ): void {
@@ -638,6 +695,26 @@ export function updateTask(
   if (updates.title !== undefined) {
     fields.push('title = ?');
     values.push(updates.title);
+  }
+  if (updates.decision_mode !== undefined) {
+    fields.push('decision_mode = ?');
+    values.push(updates.decision_mode);
+  }
+  if (updates.workflow_ref !== undefined) {
+    fields.push('workflow_ref = ?');
+    values.push(updates.workflow_ref || null);
+  }
+  if (updates.reference_files !== undefined) {
+    fields.push('reference_files = ?');
+    values.push(updates.reference_files || null);
+  }
+  if (updates.run_as !== undefined) {
+    fields.push('run_as = ?');
+    values.push(updates.run_as || 'default');
+  }
+  if (updates.model !== undefined) {
+    fields.push('model = ?');
+    values.push(updates.model || null);
   }
 
   if (fields.length === 0) return;

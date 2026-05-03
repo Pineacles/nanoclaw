@@ -9,6 +9,7 @@ export interface ChatMessage {
   timestamp: string;
   streaming?: boolean;
   mood?: string;
+  autoLoadedMemories?: string[];
 }
 
 export interface ToolStatus {
@@ -61,6 +62,7 @@ export function useChat(
           timestamp: string;
           is_bot_message: number;
           mood: string;
+          auto_loaded_memories?: string[];
         }>
       >(`/api/messages?session_id=${encodeURIComponent(activeSessionId)}`)
       .then((msgs) => {
@@ -71,6 +73,7 @@ export function useChat(
             sender: m.is_bot_message ? 'bot' : 'user',
             timestamp: m.timestamp,
             mood: m.mood,
+            autoLoadedMemories: m.auto_loaded_memories,
           })),
         );
       })
