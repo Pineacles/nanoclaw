@@ -6,7 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { getGroupDir } from './group-config.js';
+import { getGroupDir, getUserName } from './group-config.js';
 
 export interface WorkflowMeta {
   filename: string;
@@ -192,6 +192,49 @@ export function invalidateWorkflowCache(): void {
 }
 
 /**
+ * Match workflows whose triggers appear (case-insensitive substring) in the user message.
+ * Honors scope: only group-scoped + matching session-scoped workflows are considered.
+ */
+export function matchTriggeredWorkflows(
+  userMessage: string,
+  sessionId?: string,
+): WorkflowMeta[] {
+  if (!userMessage) return [];
+  const msg = userMessage.toLowerCase();
+  return listWorkflows().filter((w) => {
+    if (
+      w.scope !== 'group' &&
+      (!sessionId || w.scope !== `session:${sessionId}`)
+    ) {
+      return false;
+    }
+    if (!w.triggers || w.triggers.length === 0) return false;
+    return w.triggers.some((t) => t && msg.includes(t.toLowerCase()));
+  });
+}
+
+/**
+ * Build the per-message hard directive that tells the agent it MUST read
+ * the matched workflow files before doing anything else. Returns empty string
+ * when no workflows are triggered.
+ */
+export function buildWorkflowDirective(
+  userMessage: string,
+  sessionId?: string,
+): string {
+  const matched = matchTriggeredWorkflows(userMessage, sessionId);
+  if (matched.length === 0) return '';
+  const paths = matched
+    .map((w) => `/workspace/group/workflows/${w.filename}`)
+    .join(' AND ');
+  const names = matched.map((w) => w.name).join(', ');
+  return [
+    `⚠️ WORKFLOW REQUIRED — your incoming message matched the trigger for: ${names}.`,
+    `You MUST call the Read tool on ${paths} BEFORE any other tool use, analysis, or response text. Do not skip this even if you remember the workflow — ${getUserName()} is shown a verdict ('✓ used' or '⚠ skipped') based on whether you actually read the file.`,
+  ].join(' ');
+}
+
+/**
  * Build a compact summary of all workflows for agent context injection.
  * Only includes name, description, and triggers — not the full body.
  */
@@ -214,6 +257,6 @@ export function buildWorkflowSummary(sessionId?: string): string {
     return `  - ${w.name}: ${w.description}${triggers} (file: workflows/${w.filename})`;
   });
 
-  const directive = `WORKFLOW PRIORITY — Before you run any command, tool call, or multi-step procedure, scan this list first. If a workflow matches what you're about to do, you MUST read the file with Read on /workspace/group/workflows/<filename> and follow it exactly. Do not improvise commands when a workflow exists — workflows are how Michael told you to do these things. Only fall through to your own approach if NO workflow matches.`;
+  const directive = `WORKFLOW PRIORITY — Before you run any command, tool call, or multi-step procedure, scan this list first. If a workflow matches what you're about to do, you MUST read the file with Read on /workspace/group/workflows/<filename> and follow it exactly. Do not improvise commands when a workflow exists — workflows are how ${getUserName()} told you to do these things. Only fall through to your own approach if NO workflow matches.`;
   return `${directive}\n\nAvailable workflows:\n${lines.join('\n')}`;
 }

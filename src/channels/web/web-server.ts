@@ -55,8 +55,10 @@ import {
   getUserName,
   getUserSenderId,
   getGroupDir as getGroupDirPath,
+  isFeatureEnabled,
 } from './group-config.js';
 import { buildPerMessagePrefix, getCurrentMood } from './context-builder.js';
+import { matchTriggeredWorkflows } from './workflow-loader.js';
 import {
   regenerateEmotionalStateAsync,
   shouldRegenerate as shouldRegenerateEmotionalState,
@@ -76,7 +78,7 @@ export interface WebServerOpts {
     error: string | null;
     duration_ms: number;
   }>;
-  whatsappBridgeJid?: string;
+  whatsappBridgeJids?: string[];
   sendToWhatsApp?: (jid: string, text: string) => Promise<void>;
 }
 
@@ -85,10 +87,11 @@ export interface WebServer {
   wss: WebSocketServer;
   sendToClient(text: string, done: boolean, sessionId: string): void;
   injectBridgedMessage(
+    senderJid: string,
     senderName: string,
     content: string,
     images?: Buffer[],
-  ): void;
+  ): Promise<void>;
   setTyping(isTyping: boolean, sessionId: string): void;
   setToolUse(tool: string, target?: string, sessionId?: string): void;
   setQueued(sessionId: string, queued: boolean): void;
@@ -363,8 +366,11 @@ export function createWebServer(opts: WebServerOpts): WebServer {
   const env = readEnvFile(['WEB_PORT']);
   const port = parseInt(env.WEB_PORT || '3003', 10);
 
-  // Ensure the permanent WhatsApp session exists
-  if (opts.whatsappBridgeJid) {
+  // Ensure permanent WhatsApp sessions exist.
+  // If multiple bridge JIDs are configured, sessions are created per-number
+  // (auto-created in injectBridgedMessage). If only the legacy single JID is
+  // present (backward compat), create the single 'whatsapp' session upfront.
+  if (opts.whatsappBridgeJids && opts.whatsappBridgeJids.length === 1) {
     const existing = getWebSessionById(WHATSAPP_SESSION_ID);
     if (!existing) {
       createWebSession(WHATSAPP_SESSION_ID, 'WhatsApp');
@@ -519,6 +525,12 @@ export function createWebServer(opts: WebServerOpts): WebServer {
     // Proxy /voice-ws to the Python voice server on port 3004
     // Uses raw TCP proxy — forward the upgrade request directly
     if (url.pathname === '/voice-ws') {
+      // Check if voice call feature is enabled
+      if (!isFeatureEnabled('voice_call')) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       const targetSocket = net.createConnection(
         { host: '127.0.0.1', port: 3004 },
         () => {
@@ -681,13 +693,22 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           const webSession = getWebSessionById(sessionId);
           const isPlainSession = webSession?.mode === 'plain';
 
+          const basePipelineJid =
+            (opts.whatsappBridgeJids && opts.whatsappBridgeJids[0]) ||
+            getGroupJid();
+          const pipelineJid = isPlainSession
+            ? `${basePipelineJid}:plain`
+            : basePipelineJid;
+
           // Build context from group config, mood, memory, and context/*.md files
           const mood = getCurrentMood();
           const perMessagePrefix = buildPerMessagePrefix({
             sessionId,
             source: 'web',
             messageHint: content.slice(0, 200),
+            userMessage: content,
             groupFolder: getGroupFolder(),
+            chatJid: pipelineJid,
           });
           const agentContent = isPlainSession
             ? `[System: Current time is ${new Date().toLocaleString('en-GB', { timeZone: getTimezone(), weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}. Chat session: ${sessionId}.]\n${content}`
@@ -696,14 +717,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
           // Touch session updated_at
           touchWebSession(sessionId);
 
-          // Plain sessions get their own pipeline JID so they run in a separate container
-          // without persona/identity loaded
-          const basePipelineJid = opts.whatsappBridgeJid || getGroupJid();
-          const pipelineJid = isPlainSession
-            ? `${basePipelineJid}:plain`
-            : basePipelineJid;
-
           // Store under the pipeline JID so messages are found by the message loop
+          // (pipelineJid is computed above, before buildPerMessagePrefix, so ToM can query prior messages)
           storeMessage({
             id: messageId,
             chat_jid: pipelineJid,
@@ -745,6 +760,14 @@ export function createWebServer(opts: WebServerOpts): WebServer {
             }
           }
 
+          // Compute triggered workflows from RAW user content (before prefix).
+          // Web sessions are not plain — plain mode skips workflows entirely.
+          const triggeredWorkflows = isPlainSession
+            ? []
+            : matchTriggeredWorkflows(content, sessionId).map(
+                (w) => w.filename,
+              );
+
           // Deliver to NanoClaw pipeline
           opts.onMessage(pipelineJid, {
             id: messageId,
@@ -755,6 +778,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
             timestamp,
             mood: mood.current_mood,
             session_id: sessionId,
+            triggered_workflows:
+              triggeredWorkflows.length > 0 ? triggeredWorkflows : undefined,
           });
         }
       } catch (err) {
@@ -785,7 +810,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
     logger.info({ port }, 'Web UI server listening');
   });
 
-  const pipelineJid = opts.whatsappBridgeJid || getGroupJid();
+  const pipelineJid =
+    (opts.whatsappBridgeJids && opts.whatsappBridgeJids[0]) || getGroupJid();
 
   return {
     server,
@@ -853,40 +879,43 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         // Reads recent messages from the DB and asks Haiku to capture the
         // emotional undercurrent beneath Seyoung's moment-to-moment mood.
         // Throttled: every 3rd response, or after 30min gap, or on mood shift.
-        try {
-          const groupFolder = getGroupFolder();
-          noteEmotionalStateMessage(groupFolder);
+        if (isFeatureEnabled('emotional_state')) {
+          try {
+            const groupFolder = getGroupFolder();
+            noteEmotionalStateMessage(groupFolder);
 
-          // moodShifted: did the mood-style cache also regen this turn?
-          // We don't have a direct signal, so use a heuristic: if applyMoodTag
-          // returned a different primary than the last cached mood, treat as shifted.
-          const moodShifted = false; // conservative — let the throttle handle most cases
+            // moodShifted: did the mood-style cache also regen this turn?
+            // We don't have a direct signal, so use a heuristic: if applyMoodTag
+            // returned a different primary than the last cached mood, treat as shifted.
+            const moodShifted = false; // conservative — let the throttle handle most cases
 
-          if (shouldRegenerateEmotionalState(groupFolder, moodShifted)) {
-            // Fetch the last 10 messages from the chat (mix of user + bot)
-            // getChatMessages returns oldest-first (ASC after DESC subquery)
-            const chatMessages = getChatMessages(
-              pipelineJid,
-              10,
-              sessionId,
-            ).map(
-              (m): RecentMessage => ({
-                sender_name:
-                  m.sender_name || (m.is_bot_message ? 'Seyoung' : 'Michael'),
-                content: m.content || '',
-                is_bot_message: m.is_bot_message === 1,
-              }),
-            );
+            if (shouldRegenerateEmotionalState(groupFolder, moodShifted)) {
+              // Fetch the last 10 messages from the chat (mix of user + bot)
+              // getChatMessages returns oldest-first (ASC after DESC subquery)
+              const chatMessages = getChatMessages(
+                pipelineJid,
+                10,
+                sessionId,
+              ).map(
+                (m): RecentMessage => ({
+                  sender_name:
+                    m.sender_name ||
+                    (m.is_bot_message ? getAssistantName() : getUserName()),
+                  content: m.content || '',
+                  is_bot_message: m.is_bot_message === 1,
+                }),
+              );
 
-            regenerateEmotionalStateAsync(
-              groupFolder,
-              chatMessages,
-              tagMood,
-              moodNow.energy,
-            );
+              regenerateEmotionalStateAsync(
+                groupFolder,
+                chatMessages,
+                tagMood,
+                moodNow.energy,
+              );
+            }
+          } catch (err) {
+            logger.error({ err }, 'Failed to schedule emotional state regen');
           }
-        } catch (err) {
-          logger.error({ err }, 'Failed to schedule emotional state regen');
         }
 
         // Auto-name session after first bot response
@@ -948,16 +977,31 @@ export function createWebServer(opts: WebServerOpts): WebServer {
     },
     /**
      * Inject a message from WhatsApp into the web UI chat pipeline.
+     * Creates a per-number session (e.g. "whatsapp-41799597557") when multiple
+     * bridge numbers are configured, or falls back to the legacy single
+     * "whatsapp" session for backward compatibility.
      * Stores the message, pushes it to WebSocket clients, and triggers the agent.
      */
-    injectBridgedMessage(
+    async injectBridgedMessage(
+      senderJid: string,
       senderName: string,
       content: string,
       images?: Buffer[],
-    ) {
+    ): Promise<void> {
       const messageId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
-      const sessionId = WHATSAPP_SESSION_ID;
+
+      // Determine session ID: per-number for multi-bridge, legacy for single.
+      const phoneNumber = senderJid.split('@')[0];
+      const isMultiBridge = (opts.whatsappBridgeJids?.length ?? 0) > 1;
+      const sessionId = isMultiBridge
+        ? `whatsapp-${phoneNumber}`
+        : WHATSAPP_SESSION_ID;
+
+      // Auto-create session for this number if it doesn't exist yet
+      if (!getWebSessionById(sessionId)) {
+        createWebSession(sessionId, `WhatsApp ${senderName || phoneNumber}`);
+      }
 
       let fullContent = content;
 
@@ -983,7 +1027,9 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         sessionId,
         source: 'whatsapp',
         messageHint: fullContent.slice(0, 200),
+        userMessage: fullContent,
         groupFolder: getGroupFolder(),
+        chatJid: pipelineJid,
       });
       const agentContent = `${perMessagePrefix}\n${fullContent}`;
 
@@ -1010,7 +1056,7 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         sender_name: senderName,
         content: fullContent,
         timestamp,
-        sessionId: WHATSAPP_SESSION_ID,
+        sessionId,
       });
 
       // Check if another session is busy — if so, mark this one as queued
@@ -1031,6 +1077,11 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         }
       }
 
+      const triggeredWorkflows = matchTriggeredWorkflows(
+        fullContent,
+        sessionId,
+      ).map((w) => w.filename);
+
       // Trigger agent pipeline using the pipeline JID (which is the registered group)
       opts.onMessage(pipelineJid, {
         id: messageId,
@@ -1041,6 +1092,8 @@ export function createWebServer(opts: WebServerOpts): WebServer {
         timestamp,
         mood: mood.current_mood,
         session_id: sessionId,
+        triggered_workflows:
+          triggeredWorkflows.length > 0 ? triggeredWorkflows : undefined,
       });
     },
     close() {

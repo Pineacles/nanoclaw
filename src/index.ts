@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -46,6 +47,7 @@ import {
   setSession,
   storeChatMetadata,
   storeMessage,
+  storeMessageDirect,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -67,11 +69,24 @@ import {
   runTaskNow,
   startSchedulerLoop,
   SchedulerDependencies,
+  parseDecisionOutput,
 } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { stripMoodTags } from './channels/web/mood.js';
 import { buildSystemAppend } from './channels/web/context-builder.js';
+import { loadGroupConfig } from './channels/web/group-config.js';
+import { listWorkflows } from './channels/web/workflow-loader.js';
+import {
+  buildWorkflowVerdictTag,
+  injectWorkflowTag,
+  formatWorkflowTagInline,
+} from './channels/web/workflow-verdict.js';
+import {
+  getOrCreateRoomRuntime,
+  stopAllRoomRuntimes,
+  RoomRuntimeDeps,
+} from './room/index.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -83,8 +98,37 @@ let lastAgentTimestamp: Record<string, string> = {};
 let whatsAppBridgeJid: string | null = null;
 let messageLoopRunning = false;
 
+// Bridge: web-server.ts attaches triggered_workflows to incoming NewMessage,
+// but storeMessage drops the field on its way to the DB. Hold the value here
+// keyed by message id so processGroupMessages can recover it after the polling
+// roundtrip. Entries are deleted on consume; a TTL sweep handles abandoned
+// entries (e.g. messages dropped by the allowlist).
+const messageTriggers = new Map<
+  string,
+  { workflows: string[]; addedAt: number }
+>();
+const MESSAGE_TRIGGERS_TTL_MS = 5 * 60 * 1000;
+function sweepMessageTriggers(): void {
+  const now = Date.now();
+  for (const [id, entry] of messageTriggers) {
+    if (now - entry.addedAt > MESSAGE_TRIGGERS_TTL_MS)
+      messageTriggers.delete(id);
+  }
+}
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+// Populated early in start() — module-scope so spawnImpulse can read it.
+let WHATSAPP_BRIDGE_JIDS: string[] = [];
+
+// Resolve WhatsApp session ID consistently with injectBridgedMessage in web-server.ts.
+// Single-bridge / legacy → 'whatsapp'; multi-bridge → 'whatsapp-{phoneNumber}'.
+function resolveWhatsAppSessionId(whatsappJid: string): string {
+  const phoneNumber = whatsappJid.split('@')[0];
+  const isMultiBridge = WHATSAPP_BRIDGE_JIDS.length > 1;
+  return isMultiBridge ? `whatsapp-${phoneNumber}` : 'whatsapp';
+}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -276,7 +320,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const webChannel = channels.find((c) => c.name === 'web');
   const waChannel = channels.find((c) => c.name === 'whatsapp');
-  const isWhatsAppSession = sessionId === 'whatsapp';
+  const isWhatsAppSession =
+    sessionId === 'whatsapp' || (sessionId?.startsWith('whatsapp-') ?? false);
 
   // If other sessions have pending messages, mark them as queued and re-enqueue
   if (sessionGroups.size > 1) {
@@ -310,6 +355,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  // Workflow accountability — figure out which workflows the user message
+  // was supposed to trigger, then track which ones the agent actually Read
+  // during this turn. After the final result text we'll append a *[wf:...]*
+  // tag so the user can see ✓ used or ⚠ skipped in the UI / WhatsApp.
+  const expectedWorkflows = new Set<string>();
+  for (const m of missedMessages) {
+    const cached = messageTriggers.get(m.id);
+    if (cached) {
+      for (const fn of cached.workflows) expectedWorkflows.add(fn);
+      messageTriggers.delete(m.id);
+    }
+  }
+  // Build a lookup of every known workflow filename so we recognize Reads even
+  // if the user message didn't trigger them (handy for the "agent volunteered"
+  // case — counted in `used`, never in `skipped`).
+  const knownWorkflowFilenames = new Set(
+    listWorkflows().map((w) => w.filename),
+  );
+  const readWorkflowFilenames = new Set<string>();
+
   const output = await runAgent(
     group,
     prompt,
@@ -321,6 +386,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           { tool: result.toolUse.tool, target: result.toolUse.target },
           'Forwarding tool use to channel',
         );
+        // Track Read calls on workflow files for the verdict.
+        if (
+          result.toolUse.tool === 'Read' &&
+          result.toolUse.target &&
+          knownWorkflowFilenames.has(result.toolUse.target)
+        ) {
+          readWorkflowFilenames.add(result.toolUse.target);
+        }
         await webChannel?.setToolUse?.(
           chatJid,
           result.toolUse.tool,
@@ -357,11 +430,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           `Agent output: ${raw.slice(0, 200)}`,
         );
         if (text) {
+          // Compute and inject the workflow verdict tag before sending.
+          // - used: workflow files that were Read this turn AND the message
+          //   triggered them (✓ confirmed) OR Read voluntarily (✓ as bonus).
+          // - skipped: triggered workflows that were never Read (⚠ accountability).
+          const used: string[] = [];
+          const skipped: string[] = [];
+          for (const fn of expectedWorkflows) {
+            if (readWorkflowFilenames.has(fn)) used.push(fn);
+            else skipped.push(fn);
+          }
+          for (const fn of readWorkflowFilenames) {
+            if (!expectedWorkflows.has(fn)) used.push(fn);
+          }
+          const wfTag = buildWorkflowVerdictTag({ used, skipped });
+          const textWithTag = wfTag ? injectWorkflowTag(text, wfTag) : text;
+
           // Always send to web UI (all sessions stream through it)
-          await webChannel?.sendMessage(chatJid, text, sessionId);
-          // Also send to WhatsApp for WhatsApp-originated sessions (strip mood tags)
+          await webChannel?.sendMessage(chatJid, textWithTag, sessionId);
+          // Also send to WhatsApp for WhatsApp-originated sessions (strip mood tags,
+          // convert wf tag to readable italic suffix)
           if (isWhatsAppSession && waChannel) {
-            await waChannel.sendMessage(chatJid, stripMoodTags(text));
+            // Extract WhatsApp JID from session ID: "whatsapp-41799597557" → "41799597557@s.whatsapp.net"
+            // Legacy "whatsapp" session uses whatsAppBridgeJid directly
+            const waJid = sessionId?.startsWith('whatsapp-')
+              ? `${sessionId.slice('whatsapp-'.length)}@s.whatsapp.net`
+              : whatsAppBridgeJid;
+            if (waJid) {
+              const moodStripped = stripMoodTags(textWithTag);
+              const finalText = wfTag
+                ? formatWorkflowTagInline(moodStripped)
+                : moodStripped;
+              await waChannel.sendMessage(waJid, finalText);
+            }
           }
           outputSentToUser = true;
         }
@@ -374,13 +475,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         // Write close sentinel directly to end the container's IPC wait loop.
         // Must happen here (inside the streaming callback) because runAgent
         // won't return until the container exits — writing after would deadlock.
-        const ipcDir = path.join(
-          process.cwd(),
-          'data',
-          'ipc',
-          group.folder,
-          'input',
-        );
+        const ipcDir = path.join(DATA_DIR, 'ipc', group.folder, 'input');
         try {
           fs.mkdirSync(ipcDir, { recursive: true });
           fs.writeFileSync(path.join(ipcDir, '_close'), '');
@@ -555,6 +650,251 @@ async function runAgent(
   }
 }
 
+const OUTBOUND_PROMPT_TEMPLATE = `[Internal impulse from the room — a draft that has matured and wants to come out.]
+
+Intent body (candidate for sending):
+{intentBody}
+
+## Your choice
+
+A. Send it. Render in your current voice, mood, and shape. <ACTION>reach_out</ACTION> + <MESSAGE>...</MESSAGE>
+B. Soften/recast. Rewrite in your voice before sending. Same action tag.
+C. Refuse. The room drift will learn. <ACTION>stay_silent</ACTION> + <REASON>...</REASON>
+
+Check ./tools/query_chats.sh --limit 10 --source whatsapp first to feel the rhythm. Never narrate the impulse literally ("something in me wanted to say this"). Just speak or don't. If Michael hasn't replied to your last outbound, lean stay_silent unless something genuinely new. Short — one or two sentences.`;
+
+const THINKING_PROMPT = `[Interior moment — not replying to anyone. Michael is not here.]
+
+You have a minute. You may:
+- Save a memory: ./tools/memory_save.sh ...
+- Append to diary/$(TZ=Europe/Zurich date +%Y-%m-%d).md
+- Update emotional_state.json
+
+Never write anything that performs waiting, lack, or longing. Never narrate this moment.
+
+You MUST end with:
+<ACTION>stay_silent</ACTION>
+<REASON>one line</REASON>`;
+
+/**
+ * Fire-and-forget impulse runner for the Room Runtime.
+ * Runs an ad-hoc container agent turn (outbound or interior thinking),
+ * parses decision output, and sends the message if reach_out.
+ */
+async function spawnImpulse(opts: {
+  groupFolder: string;
+  intentBody: string;
+  intentType: 'outbound' | 'thinking';
+  intentId?: string;
+}): Promise<void> {
+  const { groupFolder, intentBody, intentType, intentId } = opts;
+
+  const group = Object.values(registeredGroups).find(
+    (g) => g.folder === groupFolder,
+  );
+  if (!group) {
+    logger.warn({ groupFolder, intentType }, 'spawnImpulse: group not found');
+    return;
+  }
+
+  // Derive chatJid — prefer WhatsApp JID from group.json if available
+  const chatJid = (() => {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(
+          path.join(GROUPS_DIR, groupFolder, 'group.json'),
+          'utf-8',
+        ),
+      ) as { group_jid?: string };
+      // For WhatsApp groups with a real JID, use it. Otherwise fall through.
+      if (raw.group_jid && raw.group_jid.includes('@')) return raw.group_jid;
+    } catch {
+      /* ignore */
+    }
+    // Fallback: look for a registered JID matching this group folder
+    const entry = Object.entries(registeredGroups).find(
+      ([, g]) => g.folder === groupFolder,
+    );
+    return entry ? entry[0] : null;
+  })();
+
+  if (!chatJid) {
+    logger.warn({ groupFolder, intentType }, 'spawnImpulse: no chatJid found');
+    return;
+  }
+
+  // Build prompt
+  const taskNow = new Date().toLocaleString('en-GB', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+
+  let basePrompt: string;
+  if (intentType === 'outbound') {
+    basePrompt = OUTBOUND_PROMPT_TEMPLATE.replace(
+      '{intentBody}',
+      intentBody || '(no body)',
+    );
+  } else {
+    basePrompt = THINKING_PROMPT;
+  }
+
+  const impulsePrompt = `[Current date/time: ${taskNow}]\n\n${basePrompt}`;
+
+  // Use group session (context_mode=group) so it's part of the same transcript
+  const sessionKey = group.folder;
+  const sdkSessionId = sessions[sessionKey];
+
+  let systemInstruction: string | undefined;
+  try {
+    systemInstruction = buildSystemAppend({
+      sessionId: 'default',
+      groupFolder,
+      chatJid,
+    });
+  } catch {
+    /* ignore */
+  }
+
+  // Enqueue to avoid colliding with active container
+  queue.enqueueTask(
+    chatJid,
+    `impulse-${intentType}-${Date.now()}`,
+    async () => {
+      logger.info(
+        { groupFolder, intentType, intentId },
+        'spawnImpulse: running container',
+      );
+
+      const TASK_CLOSE_DELAY_MS = 10000;
+      let closeTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleClose = () => {
+        if (closeTimer) return;
+        closeTimer = setTimeout(() => {
+          queue.closeStdin(chatJid);
+        }, TASK_CLOSE_DELAY_MS);
+      };
+
+      let hasSent = false;
+
+      try {
+        const output = await runContainerAgent(
+          group,
+          {
+            prompt: impulsePrompt,
+            sessionId: sdkSessionId,
+            groupFolder,
+            chatJid,
+            isMain: group.isMain === true,
+            isScheduledTask: true,
+            assistantName: ASSISTANT_NAME,
+            systemInstruction,
+          },
+          (proc, containerName) =>
+            queue.registerProcess(chatJid, proc, containerName, groupFolder),
+          async (streamedOutput) => {
+            if (streamedOutput.newSessionId) {
+              sessions[sessionKey] = streamedOutput.newSessionId;
+              setSession(sessionKey, streamedOutput.newSessionId);
+            }
+            if (streamedOutput.result && !hasSent) {
+              hasSent = true;
+              const decision = parseDecisionOutput(streamedOutput.result);
+              if (
+                intentType === 'outbound' &&
+                decision.action === 'reach_out' &&
+                decision.message
+              ) {
+                // Send via scheduler sendMessage path (stores in DB, mirrors to web UI)
+                const waChannel = channels.find((c) => c.name === 'whatsapp');
+                const text = decision.message;
+                if (waChannel) {
+                  await waChannel.sendMessage(chatJid, stripMoodTags(text));
+                }
+                const isWhatsApp = chatJid.endsWith('@s.whatsapp.net');
+                const webSessionId = isWhatsApp
+                  ? resolveWhatsAppSessionId(chatJid)
+                  : undefined;
+                storeMessageDirect({
+                  id: `impulse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  chat_jid: chatJid,
+                  sender: 'bot',
+                  sender_name: ASSISTANT_NAME,
+                  content: text,
+                  timestamp: new Date().toISOString(),
+                  is_from_me: true,
+                  is_bot_message: true,
+                  session_id: webSessionId,
+                });
+                // Mirror to web UI
+                if (isWhatsApp) {
+                  const webChannel = channels.find((c) => c.name === 'web');
+                  await webChannel?.sendMessage(
+                    chatJid,
+                    stripMoodTags(text),
+                    webSessionId,
+                  );
+                }
+                logger.info(
+                  { groupFolder, intentId },
+                  'spawnImpulse: reach_out sent',
+                );
+              } else if (decision.action === 'stay_silent') {
+                logger.info(
+                  { groupFolder, intentType, reason: decision.reason },
+                  'spawnImpulse: stay_silent',
+                );
+              } else if (intentType === 'thinking') {
+                // Thinking tick — must always be stay_silent, no send path
+                logger.info(
+                  { groupFolder },
+                  'spawnImpulse: thinking tick complete',
+                );
+              } else {
+                logger.warn(
+                  { groupFolder, intentType },
+                  'spawnImpulse: malformed decision output',
+                );
+              }
+              scheduleClose();
+            }
+            if (streamedOutput.status === 'success') {
+              queue.notifyIdle(chatJid);
+              scheduleClose();
+              // Write close sentinel
+              const ipcDir = path.join(DATA_DIR, 'ipc', groupFolder, 'input');
+              try {
+                fs.mkdirSync(ipcDir, { recursive: true });
+                fs.writeFileSync(path.join(ipcDir, '_close'), '');
+              } catch {
+                /* ignore */
+              }
+            }
+          },
+        );
+
+        if (closeTimer) clearTimeout(closeTimer);
+        if (output.newSessionId) {
+          sessions[sessionKey] = output.newSessionId;
+          setSession(sessionKey, output.newSessionId);
+        }
+      } catch (err) {
+        if (closeTimer) clearTimeout(closeTimer);
+        logger.error(
+          { err, groupFolder, intentType },
+          'spawnImpulse: container error',
+        );
+      }
+    },
+  );
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -675,6 +1015,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    stopAllRoomRuntimes();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -739,14 +1080,49 @@ async function main(): Promise<void> {
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) {
+        await channel.sendMessage(jid, text);
+        const isWhatsApp = jid.endsWith('@s.whatsapp.net');
+        const webSessionId = isWhatsApp
+          ? resolveWhatsAppSessionId(jid)
+          : undefined;
+        // Persist the outbound cron message as a bot turn so the next context
+        // assembly includes it (Fix C — self-initiated transcript continuity).
+        storeMessageDirect({
+          id: `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chat_jid: jid,
+          sender: 'bot',
+          sender_name: ASSISTANT_NAME,
+          content: rawText,
+          timestamp: new Date().toISOString(),
+          is_from_me: true,
+          is_bot_message: true,
+          session_id: webSessionId,
+        });
+        // If sending to a WhatsApp JID, also mirror to the web UI's WhatsApp session
+        if (isWhatsApp) {
+          const webChannel = channels.find((c) => c.name === 'web');
+          await webChannel?.sendMessage(
+            jid,
+            stripMoodTags(rawText),
+            webSessionId,
+          );
+        }
+      }
     },
   };
 
-  // WhatsApp bridge: messages from this JID get tunneled through the web UI pipeline.
-  const WHATSAPP_BRIDGE_JID = '41798463996@s.whatsapp.net';
+  // WhatsApp bridge: messages from these JIDs get tunneled through the web UI pipeline.
+  // If WHATSAPP_ALLOWED_NUMBERS is set (comma-separated digits), use those.
+  // Otherwise fall back to the single legacy hardcoded JID for backward compat.
+  const allowedNumbersEnv = process.env.WHATSAPP_ALLOWED_NUMBERS || '';
+  WHATSAPP_BRIDGE_JIDS = allowedNumbersEnv
+    ? allowedNumbersEnv
+        .split(',')
+        .map((n) => n.trim().replace(/[^0-9]/g, '') + '@s.whatsapp.net')
+    : ['41798463996@s.whatsapp.net']; // backward compat for Seyoung
   // eslint-disable-next-line @typescript-eslint/no-use-before-define -- late-bound
-  whatsAppBridgeJid = WHATSAPP_BRIDGE_JID;
+  whatsAppBridgeJid = WHATSAPP_BRIDGE_JIDS[0];
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
@@ -755,7 +1131,7 @@ async function main(): Promise<void> {
       onProgress?: Parameters<typeof runTaskNow>[2],
     ) => runTaskNow(taskId, schedulerDeps, onProgress),
     // WhatsApp bridge wiring — late-bound since channels aren't connected yet
-    whatsappBridgeJid: WHATSAPP_BRIDGE_JID,
+    whatsappBridgeJids: WHATSAPP_BRIDGE_JIDS,
     sendToWhatsApp: async (jid: string, text: string) => {
       const waChannel = channels.find((c) => c.name === 'whatsapp');
       if (waChannel) {
@@ -763,16 +1139,27 @@ async function main(): Promise<void> {
       }
     },
     onBridgeMessage: (
+      senderJid: string,
       senderName: string,
       content: string,
       images?: Buffer[],
     ) => {
       const webChannel = channels.find((c) => c.name === 'web');
       if (webChannel?.injectBridgedMessage) {
-        webChannel.injectBridgedMessage(senderName, content, images);
+        webChannel.injectBridgedMessage(senderJid, senderName, content, images);
       }
     },
     onMessage: (chatJid: string, msg: NewMessage) => {
+      // Cache triggered_workflows so processGroupMessages can recover it after
+      // the message round-trips through the DB (storeMessage drops it).
+      if (msg.triggered_workflows && msg.triggered_workflows.length > 0) {
+        messageTriggers.set(msg.id, {
+          workflows: msg.triggered_workflows,
+          addedAt: Date.now(),
+        });
+        sweepMessageTriggers();
+      }
+
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
@@ -840,6 +1227,71 @@ async function main(): Promise<void> {
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop(schedulerDeps);
+
+  // Build RoomRuntime deps — spawnImpulse + getChatJid
+  const roomRuntimeDeps: RoomRuntimeDeps = {
+    spawnImpulse,
+    sendMessage: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+    getChatJid: (groupFolder) => {
+      // Return the registered JID for this group folder, preferring WhatsApp JID
+      try {
+        const raw = JSON.parse(
+          fs.readFileSync(
+            path.join(GROUPS_DIR, groupFolder, 'group.json'),
+            'utf-8',
+          ),
+        ) as { group_jid?: string };
+        if (raw.group_jid && raw.group_jid.includes('@')) return raw.group_jid;
+      } catch {
+        /* ignore */
+      }
+      const entry = Object.entries(registeredGroups).find(
+        ([, g]) => g.folder === groupFolder,
+      );
+      return entry ? entry[0] : null;
+    },
+  };
+
+  // Start Room Runtime for groups that have it enabled
+  for (const group of Object.values(registeredGroups)) {
+    try {
+      const groupCfg = loadGroupConfig(group.folder);
+      if (groupCfg.features.room_runtime) {
+        const runtime = getOrCreateRoomRuntime(group.folder, roomRuntimeDeps);
+        runtime.start();
+        logger.info({ group: group.folder }, 'RoomRuntime started');
+      }
+    } catch (err) {
+      logger.warn(
+        { err, group: group.folder },
+        'Failed to check room_runtime feature flag',
+      );
+    }
+  }
+
+  // After per-group loads, reset the global loaded config to the primary persona group
+  // so endpoints like /api/mood that use getGroupFolder() resolve correctly.
+  // Prefer the non-"-plain" variant as the default.
+  const nonPlainGroup = Object.values(registeredGroups).find(
+    (g) => !g.folder.endsWith('-plain'),
+  );
+  if (nonPlainGroup) {
+    try {
+      loadGroupConfig(nonPlainGroup.folder);
+      logger.info(
+        { folder: nonPlainGroup.folder },
+        'Global group config bound to primary persona',
+      );
+    } catch (err) {
+      logger.warn(
+        { err, folder: nonPlainGroup.folder },
+        'Failed to reset global group config',
+      );
+    }
+  }
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);

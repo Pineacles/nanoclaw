@@ -57,6 +57,11 @@ export interface NewMessage {
   reply_to_message_id?: string;
   reply_to_message_content?: string;
   reply_to_sender_name?: string;
+  // Workflow filenames whose triggers matched the raw user content for this message.
+  // Computed at message-arrival time (web-server.ts) so src/index.ts doesn't have to
+  // strip the [System: ...] prefix to recover the original user text. In-memory only;
+  // not persisted to DB — the verdict gets attached to the bot reply via *[wf:...]* tag.
+  triggered_workflows?: string[];
 }
 
 export interface ScheduledTask {
@@ -65,7 +70,7 @@ export interface ScheduledTask {
   chat_jid: string;
   prompt: string;
   script?: string | null;
-  schedule_type: 'cron' | 'interval' | 'once';
+  schedule_type: 'cron' | 'interval' | 'once' | 'dynamic';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
   next_run: string | null;
@@ -73,6 +78,13 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
   title?: string;
+  feature?: string; // Feature this task belongs to (e.g., 'mood', 'diary', 'personality')
+  decision_mode?: number;
+  workflow_ref?: string | null;
+  reference_files?: string | null;
+  run_as?: string;
+  model?: string | null;
+  room_read_level?: 'strong' | 'light' | 'gate' | null;
   created_at: string;
 }
 
@@ -116,10 +128,11 @@ export interface Channel {
   getSessionKey?(groupFolder: string, sessionId?: string): string;
   // Optional: inject a message from another channel (WhatsApp bridge).
   injectBridgedMessage?(
+    senderJid: string,
     senderName: string,
     content: string,
     images?: Buffer[],
-  ): void;
+  ): void | Promise<void>;
   // Optional: show queue status for a session.
   setQueued?(sessionId: string, queued: boolean): void;
 }

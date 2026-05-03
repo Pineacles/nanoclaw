@@ -6,6 +6,81 @@ import { MOOD_COLORS } from './MoodBlob';
 import { getToken } from '../lib/api';
 import type { ChatMessage } from '../hooks/useChat';
 
+/** Format: *[wf:✓ name1,name2 | ⚠ skipped1,skipped2]*  (either side optional) */
+const WF_TAG_REGEX = /\s*\*\[wf:([^\]]+)\]\*\s*$/;
+
+interface WorkflowVerdict {
+  used: string[];
+  skipped: string[];
+}
+
+function parseWorkflowTag(content: string): { clean: string; verdict: WorkflowVerdict | null } {
+  const m = content.match(WF_TAG_REGEX);
+  if (!m) return { clean: content, verdict: null };
+  const body = m[1].trim();
+  const verdict: WorkflowVerdict = { used: [], skipped: [] };
+  for (const segRaw of body.split('|')) {
+    const seg = segRaw.trim();
+    if (seg.startsWith('✓')) {
+      verdict.used = seg.slice(1).trim().split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (seg.startsWith('⚠')) {
+      verdict.skipped = seg.slice(1).trim().split(',').map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  if (verdict.used.length === 0 && verdict.skipped.length === 0) {
+    return { clean: content, verdict: null };
+  }
+  return { clean: content.slice(0, m.index ?? 0).trimEnd(), verdict };
+}
+
+function WorkflowBadge({ verdict }: { verdict: WorkflowVerdict }) {
+  if (verdict.used.length === 0 && verdict.skipped.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1 ml-1">
+      {verdict.used.map((name) => (
+        <span
+          key={`u-${name}`}
+          title="Workflow was used during this turn"
+          className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+        >
+          <span className="material-symbols-outlined text-[12px]">check_circle</span>
+          {name}
+        </span>
+      ))}
+      {verdict.skipped.map((name) => (
+        <span
+          key={`s-${name}`}
+          title="Workflow was triggered but not followed"
+          className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/40"
+        >
+          <span className="material-symbols-outlined text-[12px]">warning</span>
+          skipped: {name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function MemoryBadge({ memories }: { memories: string[] }) {
+  if (!memories || memories.length === 0) return null;
+  // Show short names: 'finance.md' → 'finance', 'briefings/2026-05-02.md' → 'briefings'
+  const shortNames = Array.from(new Set(memories.map((n) => {
+    const base = n.split('/')[0];
+    return base.replace(/\.md$/, '');
+  })));
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1 mr-1">
+      <span
+        title={`Auto-loaded memories: ${memories.join(', ')}`}
+        className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30"
+      >
+        <span className="material-symbols-outlined text-[12px]">memory</span>
+        memory: {shortNames.join(', ')}
+      </span>
+    </div>
+  );
+}
+
 interface Props {
   message: ChatMessage;
   onDelete?: (id: string) => void;
@@ -101,12 +176,19 @@ export function MessageBubble({ message, onDelete }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Parse out the workflow verdict tag BEFORE streaming animation so the
+  // *[wf:...]* characters never flicker in the UI.
+  const { clean: tagStripped, verdict } = useMemo(
+    () => (isBot ? parseWorkflowTag(message.content) : { clean: message.content, verdict: null }),
+    [isBot, message.content],
+  );
+
   const displayContent = useStreamingAnimation(
-    message.content,
+    tagStripped,
     !!message.streaming,
   );
 
-  const contentToRender = isBot && message.streaming ? displayContent : message.content;
+  const contentToRender = isBot && message.streaming ? displayContent : tagStripped;
 
   const { cleanContent, attachments } = useMemo(
     () => parseAttachments(contentToRender),
@@ -149,6 +231,7 @@ export function MessageBubble({ message, onDelete }: Props) {
               )}
               <AttachmentGrid attachments={attachments} variant="bot" />
             </div>
+            {verdict && !message.streaming && <WorkflowBadge verdict={verdict} />}
             <div className="flex items-center gap-2 text-[10px] text-on-surface-variant ml-1">
               <span>{time}</span>
               {message.streaming && (
@@ -169,6 +252,7 @@ export function MessageBubble({ message, onDelete }: Props) {
             )}
             <AttachmentGrid attachments={attachments} variant="bot" />
           </div>
+          {verdict && !message.streaming && <WorkflowBadge verdict={verdict} />}
           <div className="flex items-center gap-2 text-[10px] text-on-surface-variant/40 mt-1 ml-1">
             <span>{time}</span>
             {message.streaming && (
@@ -198,6 +282,11 @@ export function MessageBubble({ message, onDelete }: Props) {
             <AttachmentGrid attachments={attachments} variant="user" />
           </div>
         </div>
+        {message.autoLoadedMemories && message.autoLoadedMemories.length > 0 && (
+          <div className="flex justify-end">
+            <MemoryBadge memories={message.autoLoadedMemories} />
+          </div>
+        )}
         <div className="flex items-center gap-3 mt-1.5 mr-1">
           {showActions && onDelete && !message.streaming && (
             confirmDelete ? (
@@ -235,6 +324,11 @@ export function MessageBubble({ message, onDelete }: Props) {
             <AttachmentGrid attachments={attachments} variant="user" />
           </div>
         </div>
+        {message.autoLoadedMemories && message.autoLoadedMemories.length > 0 && (
+          <div className="flex justify-end">
+            <MemoryBadge memories={message.autoLoadedMemories} />
+          </div>
+        )}
         <div className="flex items-center gap-3 mt-1 mr-1">
           {showActions && onDelete && !message.streaming && (
             confirmDelete ? (
