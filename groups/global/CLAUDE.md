@@ -36,7 +36,7 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 ## Workflows
 
-You have access to workflow files in `/workspace/group/workflows/`. Workflows define step-by-step procedures for recurring tasks (e.g. logging food in NutriPilot, analyzing finances in FinPilot).
+You have access to workflow files in `/workspace/group/workflows/`. Workflows define step-by-step procedures for recurring tasks (e.g. logging meals in a nutrition tracker, running a finance analysis).
 
 **Reading workflows:** When a user's request matches a workflow (check the workflow summaries in your system context), read the full workflow file and follow its steps.
 
