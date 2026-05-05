@@ -1,19 +1,10 @@
+/**
+ * Markdown rendering with DOMPurify sanitization.
+ * Adapted from web-ui-legacy/src/lib/markdown.ts.
+ * No syntax highlighting (no highlight.js in redesign bundle).
+ */
 import { marked } from 'marked';
-import { markedHighlight } from 'marked-highlight';
 import DOMPurify from 'dompurify';
-import hljs from 'highlight.js';
-
-marked.use(
-  markedHighlight({
-    langPrefix: 'hljs language-',
-    highlight(code: string, lang: string) {
-      if (lang && hljs.getLanguage(lang)) {
-        return hljs.highlight(code, { language: lang }).value;
-      }
-      return hljs.highlightAuto(code).value;
-    },
-  }),
-);
 
 marked.setOptions({
   breaks: true,

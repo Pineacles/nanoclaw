@@ -1,12 +1,10 @@
+// Copied from web-ui-legacy and kept identical — backend WS contract is frozen.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getWsUrl } from '../lib/api';
 
-type ServerMessage =
-  | { type: 'message'; id: string; content: string; done: boolean }
-  | { type: 'typing'; isTyping: boolean }
-  | { type: 'connected' }
-  | { type: 'error'; message: string }
-  | { type: 'pong' };
+// Broad server message type — discriminated by `type` string.
+// Callers narrow with type guards or the `type` field.
+export type ServerMessage = Record<string, unknown> & { type: string };
 
 interface UseWebSocketOpts {
   onMessage: (msg: ServerMessage) => void;
@@ -16,7 +14,7 @@ interface UseWebSocketOpts {
 export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const onMessageRef = useRef<(msg: ServerMessage) => void>(onMessage);
+  const onMessageRef = useRef(onMessage);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pingTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
@@ -31,7 +29,6 @@ export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
 
     ws.onopen = () => {
       setConnected(true);
-      // Start ping every 30s
       pingTimer.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -41,7 +38,7 @@ export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
 
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data) as ServerMessage;
+        const msg = JSON.parse(event.data as string) as ServerMessage;
         onMessageRef.current(msg);
       } catch {
         // ignore parse errors
@@ -51,7 +48,6 @@ export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
     ws.onclose = () => {
       setConnected(false);
       if (pingTimer.current) clearInterval(pingTimer.current);
-      // Reconnect after 2s
       reconnectTimer.current = setTimeout(connect, 2000);
     };
 
@@ -69,11 +65,14 @@ export function useWebSocket({ onMessage, enabled }: UseWebSocketOpts) {
     };
   }, [connect]);
 
-  const send = useCallback((data: { type: string; content?: string; images?: string[]; files?: { name: string; data: string }[]; sessionId?: string }) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
-    }
-  }, []);
+  const send = useCallback(
+    (data: Record<string, unknown>) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(data));
+      }
+    },
+    [],
+  );
 
   return { connected, send };
 }

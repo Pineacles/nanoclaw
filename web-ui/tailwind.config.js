@@ -5,122 +5,102 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Manrope', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['Inter', '-apple-system', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Surface system (warm dark)
-        surface: {
-          DEFAULT: '#110d0c',
-          dim: '#110d0c',
-          bright: '#312b28',
-          container: {
-            DEFAULT: '#1d1916',
-            low: '#171210',
-            high: '#241f1c',
-            highest: '#2a2522',
-            lowest: '#000000',
-          },
-          variant: '#2a2522',
-          tint: '#ff906d',
+        // NC design tokens — all reference CSS custom properties
+        // Usage: bg-nc-bg, text-nc-text, border-nc-border, etc.
+        nc: {
+          bg: 'var(--nc-bg)',
+          surface: 'var(--nc-surface)',
+          'surface-alt': 'var(--nc-surface-alt)',
+          'surface-hi': 'var(--nc-surface-hi)',
+          border: 'var(--nc-border)',
+          'border-soft': 'var(--nc-border-soft)',
+          text: 'var(--nc-text)',
+          'text-muted': 'var(--nc-text-muted)',
+          'text-dim': 'var(--nc-text-dim)',
+          accent: 'var(--nc-accent)',
+          'accent-soft': 'var(--nc-accent-soft)',
+          'bubble-user': 'var(--nc-bubble-user)',
+          'badge-memory-bg': 'var(--nc-badge-memory-bg)',
+          'badge-memory-fg': 'var(--nc-badge-memory-fg)',
+          'badge-memory-bd': 'var(--nc-badge-memory-bd)',
+          'badge-wf-bg': 'var(--nc-badge-wf-bg)',
+          'badge-wf-fg': 'var(--nc-badge-wf-fg)',
+          'badge-wf-bd': 'var(--nc-badge-wf-bd)',
+          warning: 'var(--nc-warning)',
+          'warning-soft': 'var(--nc-warning-soft)',
+          'warning-text': 'var(--nc-warning-text)',
+          'end-call': 'var(--nc-end-call)',
+          'voice-listening': 'var(--nc-voice-listening)',
         },
-        // Text system
-        'on-surface': {
-          DEFAULT: '#fffbff',
-          variant: '#b2a9a6',
-        },
-        'on-background': '#fffbff',
-        // Primary (signature orange)
-        primary: {
-          DEFAULT: '#ff906d',
-          dim: '#ff7348',
-          container: '#ff784e',
-          fixed: '#ff784e',
-          'fixed-dim': '#f3683b',
-        },
-        'on-primary': {
-          DEFAULT: '#5b1500',
-          container: '#470e00',
-          fixed: '#000000',
-          'fixed-variant': '#571400',
-        },
-        'inverse-primary': '#ac350a',
-        // Secondary (warm blush)
-        secondary: {
-          DEFAULT: '#ffccbc',
-          dim: '#f0beae',
-          container: '#613e33',
-          fixed: '#ffccbc',
-          'fixed-dim': '#f0beae',
-        },
-        'on-secondary': {
-          DEFAULT: '#664237',
-          container: '#f7c5b5',
-          fixed: '#503025',
-          'fixed-variant': '#704b3f',
-        },
-        // Tertiary (warm gold)
-        tertiary: {
-          DEFAULT: '#ffeaaf',
-          dim: '#eacd71',
-          container: '#f9db7d',
-          fixed: '#f9db7d',
-          'fixed-dim': '#eacd71',
-        },
-        'on-tertiary': {
-          DEFAULT: '#695400',
-          container: '#5f4c00',
-          fixed: '#493a00',
-          'fixed-variant': '#6b5600',
-        },
-        // Error
-        error: {
-          DEFAULT: '#ff716c',
-          dim: '#d7383b',
-          container: '#9f0519',
-        },
-        'on-error': '#490006',
-        'on-error-container': '#ffa8a3',
-        // Outline
-        outline: {
-          DEFAULT: '#7b7471',
-          variant: '#4c4744',
-        },
-        // Inverse
-        'inverse-surface': '#fff8f5',
-        'inverse-on-surface': '#5a5451',
-        // Legacy aliases for existing code
-        bg: {
-          primary: '#110d0c',
-          sidebar: '#110d0c',
-          surface: '#1d1916',
-          input: '#2a2522',
-          secondary: '#241f1c',
-          hover: '#ffffff10',
-        },
-        text: {
-          primary: '#fffbff',
-          secondary: '#b2a9a6',
-          muted: '#7b7471',
-        },
-        accent: {
-          primary: '#ff906d',
-          start: '#ff906d',
-          end: '#ff784e',
-        },
-        border: {
-          DEFAULT: '#4c474420',
-          input: '#4c4744',
-          focus: '#ff906d',
-        },
-        success: '#30D158',
-        warning: '#ffeaaf',
-        danger: '#ff716c',
-        cyan: '#64D2FF',
       },
       borderRadius: {
-        DEFAULT: '1rem',
-        lg: '2rem',
-        xl: '3rem',
+        pill: '999px',
+        composer: '22px',
+        bubble: '18px',
+        card: '14px',
+        btn: '8px',
+        brand: '7px',
+      },
+      boxShadow: {
+        composer: '0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.05)',
+        send: '0 2px 8px var(--nc-accent-shadow), inset 0 1px 0 rgba(255,255,255,0.25)',
+      },
+      maxWidth: {
+        chat: '720px',
+        suggestions: '560px',
+      },
+      animation: {
+        'nc-bounce': 'nc-bounce 1.2s ease-in-out infinite',
+        'nc-pulse': 'nc-pulse 1.4s ease-in-out infinite',
+        'nc-blink': 'nc-blink 1s infinite',
+        'nc-mood-breathe': 'nc-mood-breathe 5.5s ease-in-out infinite',
+        'nc-skeleton': 'nc-skeleton 1.6s linear infinite',
+        'nc-spin': 'nc-spin 1s linear infinite',
+        'nc-msg': 'nc-msg 280ms var(--nc-ease-entrance) forwards',
+        'nc-tool-slide': 'nc-tool-slide 220ms var(--nc-ease-entrance) forwards',
+      },
+      keyframes: {
+        'nc-bounce': {
+          '0%, 80%, 100%': { transform: 'translateY(0)', opacity: '0.4' },
+          '40%': { transform: 'translateY(-4px)', opacity: '1' },
+        },
+        'nc-pulse': {
+          '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '0.5', transform: 'scale(1.3)' },
+        },
+        'nc-blink': {
+          '0%, 50%': { opacity: '1' },
+          '51%, 100%': { opacity: '0' },
+        },
+        'nc-mood-breathe': {
+          '0%, 100%': { transform: 'scale(1)', opacity: '0.85' },
+          '50%': { transform: 'scale(1.06)', opacity: '1' },
+        },
+        'nc-skeleton': {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        'nc-spin': {
+          '0%': { transform: 'rotate(0deg)' },
+          '100%': { transform: 'rotate(360deg)' },
+        },
+        'nc-msg': {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        'nc-tool-slide': {
+          '0%': { opacity: '0', transform: 'translateX(-8px) scale(0.96)' },
+          '100%': { opacity: '1', transform: 'translateX(0) scale(1)' },
+        },
+      },
+      transitionTimingFunction: {
+        'nc-entrance': 'cubic-bezier(0.16, 1, 0.3, 1)',
+        'nc-state': 'cubic-bezier(0.4, 0, 0.2, 1)',
+        'nc-confirm': 'cubic-bezier(0.34, 1.56, 0.64, 1)',
       },
     },
   },

@@ -1,330 +1,247 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, getToken, setToken } from './lib/api';
+import { useEffect, useState, lazy, Suspense } from 'react';
+import { DesktopLayout } from './components/shell/DesktopLayout';
+import { MobileLayout } from './components/shell/MobileLayout';
+import { ChatPage } from './pages/Chat';
+import { MoreSheet } from './components/sheet/MoreSheet';
+
+const MemoryPage = lazy(() => import('./pages/Memory').then((m) => ({ default: m.MemoryPage })));
+const TasksPage = lazy(() => import('./pages/Tasks').then((m) => ({ default: m.TasksPage })));
+const WorkflowsPage = lazy(() => import('./pages/Workflows').then((m) => ({ default: m.WorkflowsPage })));
+const ContextPage = lazy(() => import('./pages/Context').then((m) => ({ default: m.ContextPage })));
+const SettingsPage = lazy(() => import('./pages/Settings').then((m) => ({ default: m.SettingsPage })));
+const VoicePage = lazy(() => import('./pages/Voice').then((m) => ({ default: m.VoicePage })));
 import { useChat } from './hooks/useChat';
-import { useMemory } from './hooks/useMemory';
+import { useMood, getMoodColor } from './hooks/useMood';
 import { useTasks } from './hooks/useTasks';
-import { useWorkflows } from './hooks/useWorkflows';
-import { useSessions } from './hooks/useSessions';
-import { useMood } from './hooks/useMood';
-import { Chat } from './components/Chat';
-import { Sidebar, View } from './components/Sidebar';
-import { MemoryPage } from './components/MemoryPage';
-import { WorkflowsPage } from './components/WorkflowsPage';
-import { TasksPage } from './components/TasksPage';
-import { SettingsPage } from './components/SettingsPage';
-import { ContextPage } from './components/ContextPage';
-import { VoiceCallPage } from './components/VoiceCallPage';
-import { SessionsPanel } from './components/SessionsPanel';
-import { FilesPanel, countAttachments } from './components/FilesPanel';
-import { BottomNav } from './components/BottomNav';
-import { MoreSheet } from './components/MoreSheet';
-import { MOOD_COLORS } from './components/MoodBlob';
+import { useTheme } from './hooks/useTheme';
+import { useGroupConfig } from './hooks/useGroupConfig';
+import { getToken, setToken } from './lib/api';
+import type { WebSession } from './components/sheet/SessionsPanel';
 
-export default function App() {
-  const [authVersion, setAuthVersion] = useState(0);
-  const [activeView, setActiveViewRaw] = useState<View>(() => {
-    const saved = localStorage.getItem('nanoclaw_active_view');
-    return (saved as View) || 'sessions';
-  });
-  const setActiveView = useCallback((view: View) => {
-    setActiveViewRaw(view);
-    localStorage.setItem('nanoclaw_active_view', view);
-  }, []);
-  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
-  const [showFilesPanel, setShowFilesPanel] = useState(false);
-  const [features, setFeatures] = useState<Record<string, boolean>>({});
-  const authenticated = !!getToken();
+export type PageView = 'chat' | 'memory' | 'workflows' | 'tasks' | 'context' | 'voice' | 'settings';
 
-  const handleAuthChange = useCallback(() => {
-    setAuthVersion((v) => v + 1);
-  }, []);
+const VIEW_KEY = 'nanoclaw_active_view';
 
+/** Detect desktop breakpoint (≥1024px). Re-evaluates on resize. */
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
   useEffect(() => {
-    if (!authenticated) return;
-    api.get<{ features?: Record<string, boolean>; assistant?: { name: string } }>('/api/group-config')
-      .then(config => {
-        setFeatures(config.features || {});
-        if (config.assistant?.name) {
-          document.title = config.assistant.name;
-        }
-      })
-      .catch(() => {});
-  }, [authenticated]);
-
-  const isEnabled = (key: string) => features[key] !== false;
-
-  const {
-    sessions,
-    activeSessionId,
-    setActiveSessionId,
-    createSession,
-    renameSession,
-    deleteSession,
-    handleSessionRenamed,
-  } = useSessions(authenticated);
-
-  const { mood, setMood } = useMood(authenticated);
-
-  const tasks = useTasks(authenticated);
-
-  const { messages, isTyping, toolStatus, isQueued, connected, sendMessage, deleteMessage } =
-    useChat(authenticated, activeSessionId, (m) =>
-      setMood((prev) => ({ ...prev, current_mood: m.current_mood, energy: m.energy, activity: m.activity })),
-      handleSessionRenamed,
-      tasks.handleTaskEvent,
-    );
-  const memory = useMemory(authenticated);
-  const wf = useWorkflows(authenticated);
-
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
-  const attachmentCount = useMemo(() => countAttachments(messages), [messages]);
-
-  const moodColor = MOOD_COLORS[mood.current_mood || 'chill'] || MOOD_COLORS.chill;
-
-  // Close more sheet on nav
-  const handleViewChange = useCallback((view: View) => {
-    setActiveView(view);
-    setMoreSheetOpen(false);
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
   }, []);
+  return isDesktop;
+}
 
-  const handleSessionSelect = useCallback((id: string) => {
-    setActiveSessionId(id);
-    setMoreSheetOpen(false);
-  }, [setActiveSessionId]);
+/* ── Login screen ── */
+function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
+  const [value, setValue] = useState('');
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (value.trim()) onLogin(value.trim());
+  };
+  return (
+    <div className="flex h-full items-center justify-center bg-nc-bg">
+      <form
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-4 p-8 bg-nc-surface rounded-[18px] border border-nc-border w-full max-w-xs"
+      >
+        <h1 className="text-nc-text font-semibold text-lg tracking-[-0.01em] m-0">
+          NanoClaw
+        </h1>
+        <p className="text-nc-text-muted text-sm m-0">Enter your access token to connect.</p>
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Token"
+          aria-label="Access token"
+          className="w-full h-10 px-3 rounded-btn bg-nc-surface-alt border border-nc-border text-nc-text text-sm outline-none focus:border-nc-accent transition-colors duration-[--nc-dur-micro]"
+        />
+        <button
+          type="submit"
+          disabled={!value.trim()}
+          aria-label="Connect"
+          className="nc-press nc-gradient-fill text-white h-10 rounded-btn text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Connect
+        </button>
+      </form>
+    </div>
+  );
+}
 
-  // Close files panel on session switch
-  useEffect(() => {
-    setShowFilesPanel(false);
-  }, [activeSessionId]);
+export function App() {
+  // Auth
+  const [authToken, setAuthToken] = useState(getToken);
+  const authenticated = authToken.length > 0;
 
-  void authVersion;
-
-  const renderMainContent = () => {
-    if (!authenticated) {
-      return (
-        <div className="flex items-center justify-center h-full px-4">
-          <div className="p-8 sm:p-10 bg-surface-container rounded-[1rem] border-l-4 border-primary inner-thought-glow max-w-sm w-full">
-            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-primary/20 mx-auto mb-4">
-              <span className="material-symbols-outlined text-primary text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>lock</span>
-            </div>
-            <h1 className="text-xl font-bold mb-2 text-center">Welcome</h1>
-            <p className="text-on-surface-variant text-sm leading-relaxed text-center mb-6">
-              Enter your authentication token to begin.
-            </p>
-            <form onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements.namedItem('token') as HTMLInputElement; if (input.value.trim()) { setToken(input.value.trim()); handleAuthChange(); } }}>
-              <input
-                name="token"
-                type="password"
-                placeholder="Auth token..."
-                className="w-full bg-surface-container-highest border-none rounded-xl py-3 px-4 text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-dim transition-all text-sm focus:outline-none mb-3"
-              />
-              <button
-                type="submit"
-                className="w-full signature-glow text-on-primary-fixed font-bold py-3 px-8 rounded-xl shadow-lg active:scale-[0.98] transition-all text-sm"
-              >
-                Connect
-              </button>
-            </form>
-          </div>
-        </div>
-      );
-    }
-
-    switch (activeView) {
-      case 'sessions':
-        return (
-          <Chat
-            messages={messages}
-            isTyping={isTyping}
-            toolStatus={toolStatus}
-            isQueued={isQueued}
-            connected={connected}
-            onSend={sendMessage}
-            onDelete={deleteMessage}
-            readOnly={activeSessionId === 'whatsapp' || activeSessionId?.startsWith('whatsapp-')}
-          />
-        );
-      case 'memory':
-        return (
-          <MemoryPage
-            files={memory.files}
-            selectedFile={memory.selectedFile}
-            content={memory.content}
-            loading={memory.loading}
-            onSelect={memory.loadFile}
-            onSave={memory.saveFile}
-            onCreate={memory.createFile}
-            onDelete={memory.deleteFile}
-          />
-        );
-      case 'workflows':
-        return (
-          <WorkflowsPage
-            workflows={wf.workflows}
-            selectedWorkflow={wf.selectedWorkflow}
-            loading={wf.loading}
-            onSelect={wf.loadWorkflow}
-            onSave={wf.saveWorkflow}
-            onCreate={wf.createWorkflow}
-            onDelete={wf.deleteWorkflow}
-            onClearSelection={wf.clearSelection}
-          />
-        );
-      case 'tasks':
-        return (
-          <TasksPage
-            tasks={tasks.tasks}
-            onCreate={tasks.createTask}
-            onUpdate={tasks.updateTask}
-            onDelete={tasks.deleteTask}
-            onTestRun={tasks.testRun}
-            onActivate={tasks.activateTask}
-            runningTaskIds={tasks.runningTaskIds}
-            taskProgress={tasks.taskProgress}
-            taskResults={tasks.taskResults}
-          />
-        );
-      case 'context':
-        return <ContextPage authenticated={authenticated} />;
-      case 'voice':
-        if (!isEnabled('voice_call')) {
-          return (
-            <Chat
-              messages={messages}
-              isTyping={isTyping}
-              toolStatus={toolStatus}
-              isQueued={isQueued}
-              connected={connected}
-              onSend={sendMessage}
-              onDelete={deleteMessage}
-              readOnly={activeSessionId === 'whatsapp' || activeSessionId?.startsWith('whatsapp-')}
-            />
-          );
-        }
-        return <VoiceCallPage />;
-      case 'settings':
-        return (
-          <SettingsPage
-            authenticated={authenticated}
-            onAuthChange={handleAuthChange}
-          />
-        );
-    }
+  const handleLogin = (token: string) => {
+    setToken(token);
+    setAuthToken(token);
   };
 
-  return (
-    <div className="h-dvh flex bg-surface">
-      {/* Desktop Sidebar — hidden on mobile */}
-      <Sidebar
-        activeView={activeView}
-        onViewChange={handleViewChange}
-        mood={mood}
-        features={features}
-        sessionList={
-          <SessionsPanel
-            sessions={sessions}
-            activeSessionId={activeSessionId}
-            onSelect={handleSessionSelect}
-            onCreate={createSession}
-            onRename={renameSession}
-            onDelete={deleteSession}
-          />
-        }
-      />
+  // Theme
+  useTheme();
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 lg:ml-72">
-        {/* TopAppBar — mobile: minimal with mood dot. Desktop: full */}
-        <header className="flex justify-between items-center px-4 sm:px-8 py-2.5 sm:py-4 w-full sticky top-0 z-20 bg-surface/80 backdrop-blur-lg">
-          <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
-            {/* Mobile: mood dot (tapping opens more sheet) */}
-            <button
-              className="lg:hidden w-8 h-8 flex items-center justify-center rounded-full transition-colors active:scale-90"
-              onClick={() => setMoreSheetOpen(true)}
-              title="Menu"
-            >
-              {isEnabled('mood') && (
-                <div
-                  className="w-3 h-3 rounded-full transition-colors duration-700 shadow-[0_0_8px_var(--mood-glow)]"
-                  style={{
-                    background: moodColor,
-                    '--mood-glow': moodColor + '60',
-                  } as React.CSSProperties}
-                />
-              )}
-            </button>
-            {/* Desktop: brand */}
-            <h1 className="hidden lg:block text-lg font-bold text-primary tracking-tight">Assistant</h1>
-            <span className="hidden lg:inline px-2 py-0.5 rounded-md bg-surface-container-highest text-[10px] text-on-surface-variant border border-outline-variant/10 uppercase tracking-tighter">
-              Claude Sonnet 4
-            </span>
-            {/* Mobile: session name */}
-            <span className="lg:hidden text-sm font-semibold text-on-surface truncate max-w-[200px]">
-              {activeView === 'sessions' ? (activeSession?.name || 'Chat') : activeView.charAt(0).toUpperCase() + activeView.slice(1)}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 sm:gap-4">
-            {activeView === 'sessions' && (
-              <>
-                {/* Desktop: session name */}
-                <span className="hidden lg:block text-sm text-on-surface-variant font-medium">
-                  {activeSession?.name || 'Chat'}
-                </span>
-                <button
-                  onClick={() => setShowFilesPanel((v) => !v)}
-                  className={`relative w-8 h-8 flex items-center justify-center rounded-full transition-colors ${
-                    showFilesPanel ? 'bg-primary/15 text-primary' : 'text-on-surface-variant/50 hover:text-on-surface-variant hover:bg-surface-container-high'
-                  }`}
-                  title="Files & attachments"
-                >
-                  <span className="material-symbols-outlined text-[18px]">folder_open</span>
-                  {attachmentCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 flex items-center justify-center bg-primary text-[9px] font-bold text-on-primary-fixed rounded-full px-1">
-                      {attachmentCount}
-                    </span>
-                  )}
-                </button>
-              </>
-            )}
-            <span className={`w-2 h-2 rounded-full shrink-0 ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-error'}`} />
-          </div>
-        </header>
+  // Group config (feature flags)
+  const { groupConfig } = useGroupConfig();
+  const voiceEnabled = groupConfig?.features?.voice_call ?? false;
 
-        {/* Content — on mobile, reserve space for bottom nav */}
-        <div className="flex-1 min-h-0 pb-14 lg:pb-0">
-          {renderMainContent()}
-        </div>
-      </main>
+  // Layout
+  const isDesktop = useIsDesktop();
 
-      {/* Mobile Bottom Nav */}
-      <BottomNav
-        activeView={activeView}
-        onViewChange={handleViewChange}
-        onMoreTap={() => setMoreSheetOpen((v) => !v)}
-        moreOpen={moreSheetOpen}
-      />
+  // View routing
+  const [view, setView] = useState<PageView>(() => {
+    const stored = localStorage.getItem(VIEW_KEY) as PageView | null;
+    return stored ?? 'chat';
+  });
 
-      {/* More Sheet (mobile) */}
-      <MoreSheet
-        open={moreSheetOpen}
-        onClose={() => setMoreSheetOpen(false)}
-        mood={mood}
-        features={features}
-        sessions={sessions}
+  useEffect(() => {
+    localStorage.setItem(VIEW_KEY, view);
+  }, [view]);
+
+  // Session state
+  const [activeSessionId, setActiveSessionId] = useState('default');
+  const [activeSessionName, setActiveSessionName] = useState('Personal');
+  const [activeSessionMode, setActiveSessionMode] = useState<'persona' | 'plain' | 'whatsapp'>('persona');
+
+  // Mood
+  const { mood, setMood } = useMood(authenticated);
+  const moodColor = getMoodColor(mood.current_mood);
+
+  // Tasks (for WS event wiring)
+  const { handleTaskEvent } = useTasks(authenticated);
+
+  // Chat
+  const { messages, streamingBubble, isTyping, toolStatus, isQueued, connected, sendMessage, loadOlder, hasMoreOlder, loadingOlder } = useChat(
+    authenticated,
+    activeSessionId,
+    (m) => setMood((prev) => ({ ...prev, ...m })),
+    (sessionId, name) => {
+      if (sessionId === activeSessionId) setActiveSessionName(name);
+    },
+    handleTaskEvent,
+  );
+
+  // Mobile sheet state
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
+
+  if (!authenticated) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  const chatPage = (
+    <ChatPage
+      isMobile={!isDesktop}
+      messages={messages}
+      streamingBubble={streamingBubble}
+      isTyping={isTyping}
+      toolStatus={toolStatus}
+      isQueued={isQueued}
+      connected={connected}
+      activeSessionId={activeSessionId}
+      sessionName={activeSessionName}
+      sessionMode={activeSessionMode}
+      moodActivity={mood.activity}
+      moodColor={moodColor}
+      onSend={sendMessage}
+      onNewChat={() => {
+        setActiveSessionId(`session-${Date.now()}`);
+        setActiveSessionName('New chat');
+        setActiveSessionMode('persona');
+      }}
+      onSessionSwitch={() => setMoreSheetOpen(true)}
+      onLoadOlder={loadOlder}
+      hasMoreOlder={hasMoreOlder}
+      loadingOlder={loadingOlder}
+    />
+  );
+
+  const handleSessionSelect = (s: WebSession) => {
+    setActiveSessionId(s.id);
+    setActiveSessionName(s.name);
+    setActiveSessionMode(s.mode === 'plain' ? 'plain' : 'persona');
+    setView('chat');
+  };
+
+  const currentPage = (() => {
+    switch (view) {
+      case 'chat':
+        return chatPage;
+      case 'memory':
+        return <MemoryPage isMobile={!isDesktop} authenticated={authenticated} />;
+      case 'tasks':
+        return <TasksPage isMobile={!isDesktop} authenticated={authenticated} />;
+      case 'workflows':
+        return <WorkflowsPage isMobile={!isDesktop} authenticated={authenticated} />;
+      case 'context':
+        return <ContextPage isMobile={!isDesktop} authenticated={authenticated} />;
+      case 'settings':
+        return <SettingsPage isMobile={!isDesktop} authenticated={authenticated} />;
+      case 'voice':
+        return <VoicePage isMobile={!isDesktop} authenticated={authenticated} voiceEnabled={voiceEnabled} />;
+      default:
+        return chatPage;
+    }
+  })();
+
+  const fallback = <div className="flex h-full items-center justify-center text-nc-text-dim">Loading…</div>;
+
+  if (isDesktop) {
+    return (
+      <DesktopLayout
+        active={view}
+        onNavigate={setView}
+        moodColor={moodColor}
+        moodLabel={mood.current_mood}
+        authenticated={authenticated}
         activeSessionId={activeSessionId}
-        onSelectSession={handleSessionSelect}
-        onCreateSession={createSession}
-        onRenameSession={renameSession}
-        onDeleteSession={deleteSession}
-        onNavigate={handleViewChange}
-        attachmentCount={attachmentCount}
-        onOpenFiles={() => { setShowFilesPanel(true); setMoreSheetOpen(false); }}
-      />
+        onSessionSelect={handleSessionSelect}
+        onSessionCreated={(s) => {
+          setActiveSessionId(s.id);
+          setActiveSessionName(s.name);
+          setActiveSessionMode(s.mode === 'plain' ? 'plain' : 'persona');
+        }}
+        onNewChat={() => {
+          setView('chat');
+          setActiveSessionId(`session-${Date.now()}`);
+          setActiveSessionName('New chat');
+        }}
+      >
+        <Suspense fallback={fallback}>{currentPage}</Suspense>
+      </DesktopLayout>
+    );
+  }
 
-      {/* Files drawer */}
-      {showFilesPanel && activeView === 'sessions' && (
-        <FilesPanel messages={messages} onClose={() => setShowFilesPanel(false)} />
+  return (
+    <>
+      <MobileLayout
+        active={view}
+        onNavigate={setView}
+        moodColor={moodColor}
+        onMoreClick={() => setMoreSheetOpen(true)}
+      >
+        <Suspense fallback={fallback}>{currentPage}</Suspense>
+      </MobileLayout>
+
+      {moreSheetOpen && (
+        <MoreSheet
+          onClose={() => setMoreSheetOpen(false)}
+          moodColor={moodColor}
+          moodLabel={mood.current_mood}
+          authenticated={authenticated}
+          activeSessionId={activeSessionId}
+          onSessionSelect={handleSessionSelect}
+          onSessionCreated={(s) => {
+            setActiveSessionId(s.id);
+            setActiveSessionName(s.name);
+            setActiveSessionMode(s.mode === 'plain' ? 'plain' : 'persona');
+          }}
+          onNavigate={(v) => { setView(v); setMoreSheetOpen(false); }}
+        />
       )}
-    </div>
+    </>
   );
 }

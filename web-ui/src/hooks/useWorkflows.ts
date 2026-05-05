@@ -5,21 +5,44 @@ export interface WorkflowMeta {
   filename: string;
   name: string;
   description: string;
-  scope: string;
+  scope: string; // 'group' | 'session:<id>'
   triggers: string[];
   size: number;
   modified: string;
 }
 
 export interface Workflow extends WorkflowMeta {
-  content: string;
-  body: string;
+  content: string; // full file including frontmatter
+  body: string;    // markdown body only
 }
 
-export function useWorkflows(authenticated: boolean) {
+export interface UseWorkflowsResult {
+  workflows: WorkflowMeta[];
+  activeWorkflow: Workflow | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  isDirty: boolean;
+  editorContent: string;
+  setEditorContent: (v: string) => void;
+  selectWorkflow: (filename: string) => Promise<void>;
+  saveWorkflow: (filename: string, content: string) => Promise<void>;
+  createWorkflow: (filename: string, content: string) => Promise<void>;
+  deleteWorkflow: (filename: string) => Promise<void>;
+  refresh: () => Promise<void>;
+}
+
+/**
+ * Workflows hook — list / CRUD for groups/<group>/workflows/*.md
+ * Endpoints: GET/POST /api/workflows, GET/PUT/DELETE /api/workflows/:filename
+ */
+export function useWorkflows(authenticated: boolean): UseWorkflowsResult {
   const [workflows, setWorkflows] = useState<WorkflowMeta[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(null);
+  const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editorContent, setEditorContent] = useState('');
+
+  const isDirty = Boolean(activeWorkflow && editorContent !== activeWorkflow.content);
 
   const refresh = useCallback(async () => {
     if (!authenticated) return;
@@ -35,54 +58,58 @@ export function useWorkflows(authenticated: boolean) {
     refresh();
   }, [refresh]);
 
-  const loadWorkflow = useCallback(async (filename: string) => {
-    setLoading(true);
+  const selectWorkflow = useCallback(async (filename: string) => {
+    setIsLoading(true);
     try {
       const wf = await api.get<Workflow>(`/api/workflows/${encodeURIComponent(filename)}`);
-      setSelectedWorkflow(wf);
+      setActiveWorkflow(wf);
+      setEditorContent(wf.content);
     } catch {
-      // ignore
+      setActiveWorkflow(null);
+      setEditorContent('');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   }, []);
 
   const saveWorkflow = useCallback(async (filename: string, content: string) => {
-    await api.put(`/api/workflows/${encodeURIComponent(filename)}`, { content });
-    refresh();
-    // Reload if this is the selected workflow
-    setSelectedWorkflow((prev) => {
-      if (prev && prev.filename === filename) {
-        return { ...prev, content };
-      }
-      return prev;
-    });
+    setIsSaving(true);
+    try {
+      await api.put(`/api/workflows/${encodeURIComponent(filename)}`, { content });
+      setActiveWorkflow((prev) => prev ? { ...prev, content } : null);
+      await refresh();
+    } finally {
+      setIsSaving(false);
+    }
   }, [refresh]);
 
   const createWorkflow = useCallback(async (filename: string, content: string) => {
     await api.post('/api/workflows', { filename, content });
-    refresh();
-  }, [refresh]);
+    await refresh();
+    await selectWorkflow(filename);
+  }, [refresh, selectWorkflow]);
 
   const deleteWorkflow = useCallback(async (filename: string) => {
     await api.delete(`/api/workflows/${encodeURIComponent(filename)}`);
-    setSelectedWorkflow((prev) => (prev?.filename === filename ? null : prev));
-    refresh();
-  }, [refresh]);
-
-  const clearSelection = useCallback(() => {
-    setSelectedWorkflow(null);
-  }, []);
+    if (activeWorkflow?.filename === filename) {
+      setActiveWorkflow(null);
+      setEditorContent('');
+    }
+    await refresh();
+  }, [refresh, activeWorkflow]);
 
   return {
     workflows,
-    selectedWorkflow,
-    loading,
-    refresh,
-    loadWorkflow,
+    activeWorkflow,
+    isLoading,
+    isSaving,
+    isDirty,
+    editorContent,
+    setEditorContent,
+    selectWorkflow,
     saveWorkflow,
     createWorkflow,
     deleteWorkflow,
-    clearSelection,
+    refresh,
   };
 }
