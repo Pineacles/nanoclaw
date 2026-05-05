@@ -77,24 +77,33 @@ function handleMessages(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
-  getMessages: (sessionId?: string) => Array<{
-    id: string;
-    sender_name: string;
-    content: string;
-    timestamp: string;
-    is_bot_message: number;
-  }>,
+  getMessages: ApiDeps['getMessages'],
 ): void {
   if (req.method !== 'GET') return error(res, 'Method not allowed', 405);
   const sessionId = url.searchParams.get('session_id') ?? undefined;
-  const messages = getMessages(sessionId).map((m) => {
-    // Strip system time note injected for the agent — not for the UI.
-    // Non-greedy so we stop at the first ] and don't over-match if the
-    // user message contains ]\n.
-    let content = m.content.replace(
-      /^\[System: Current time is [\s\S]+?\]\n?/,
-      '',
-    );
+  const rawLimit = parseInt(url.searchParams.get('limit') ?? '20', 10);
+  const limit = Math.min(isNaN(rawLimit) ? 20 : Math.max(1, rawLimit), 100);
+  const before = url.searchParams.get('before') ?? undefined;
+  const messages = getMessages(sessionId, limit, before).map((m) => {
+    let content = m.content;
+    let system_context: string | null = null;
+
+    // Preferred: sentinel-wrapped system block (new format).
+    const sysMatch = content.match(/<<<sys>>>([\s\S]*?)<<<end-sys>>>\n?/);
+    if (sysMatch) {
+      system_context = sysMatch[1];
+      content = content.replace(/<<<sys>>>[\s\S]*?<<<end-sys>>>\n?/, '');
+    } else {
+      // Backwards compat for messages stored before the sentinel change.
+      // Use a GREEDY match to find the LAST ] followed by \n, since old
+      // system blocks may contain inner ] characters from room bleed.
+      const oldMatch = content.match(/^\[System: Current time is [\s\S]+\]\n/);
+      if (oldMatch) {
+        system_context = oldMatch[0].replace(/\n$/, '');
+        content = content.slice(oldMatch[0].length);
+      }
+    }
+
     // Extract and strip auto-loaded memory context block.
     const autoMatch = content.match(
       /<<<auto-memory>>>\n([\s\S]*?)\n<<<end-auto-memory>>>/,
@@ -109,7 +118,8 @@ function handleMessages(
         '',
       );
     }
-    return { ...m, content, auto_loaded_memories };
+
+    return { ...m, content, auto_loaded_memories, system_context };
   });
   json(res, messages);
 }
@@ -480,6 +490,68 @@ function handleQuickActionDelete(
   json(res, { ok: true });
 }
 
+// --- Session Media ---
+
+interface MediaItem {
+  url: string;
+  filename: string;
+  type: 'image' | 'file';
+  messageId: string;
+  timestamp: string;
+  sender: 'user' | 'bot';
+}
+
+function handleSessionMedia(
+  res: ServerResponse,
+  sessionId: string,
+  url: URL,
+  getMessages: ApiDeps['getMessages'],
+): void {
+  const IMAGE_MARKER = /\[Image: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
+  const FILE_MARKER = /\[File: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
+  const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
+
+  const rawLimit = parseInt(url.searchParams.get('limit') ?? '30', 10);
+  const mediaLimit = Math.min(isNaN(rawLimit) ? 30 : Math.max(1, rawLimit), 100);
+  const before = url.searchParams.get('before') ?? undefined;
+
+  // Use a large scan window to find enough media items — we'll cap after scanning.
+  // The before cursor restricts which messages we scan (by message timestamp).
+  const msgs = getMessages(sessionId, 5000, before);
+  const items: MediaItem[] = [];
+
+  for (const m of msgs) {
+    const sender: 'user' | 'bot' = m.is_bot_message ? 'bot' : 'user';
+
+    for (const re of [IMAGE_MARKER, FILE_MARKER]) {
+      re.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(m.content)) !== null) {
+        const filename = match[1];
+        const isImage = IMAGE_EXTS.test(filename);
+        items.push({
+          url: `/uploads/${encodeURIComponent(filename)}`,
+          filename,
+          type: isImage ? 'image' : 'file',
+          messageId: m.id,
+          timestamp: m.timestamp,
+          sender,
+        });
+      }
+    }
+  }
+
+  // Newest first
+  items.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+
+  // Trim to requested page size
+  const page = items.slice(0, mediaLimit);
+
+  json(res, { items: page });
+}
+
 // --- Route dispatcher ---
 
 export interface TaskProgressEvent {
@@ -494,7 +566,7 @@ export interface TaskProgressEvent {
 }
 
 export interface ApiDeps {
-  getMessages: (sessionId?: string) => Array<{
+  getMessages: (sessionId?: string, limit?: number, before?: string) => Array<{
     id: string;
     sender_name: string;
     content: string;
@@ -544,6 +616,13 @@ export async function handleApiRoute(
       await handleSessionCreate(req, res);
       return true;
     }
+    // Per-session media — must be checked before the catch-all /api/sessions/:id
+    const sessMediaMatch = p.match(/^\/api\/sessions\/([^/]+)\/media$/);
+    if (sessMediaMatch && method === 'GET') {
+      handleSessionMedia(res, decodeURIComponent(sessMediaMatch[1]), url, deps.getMessages);
+      return true;
+    }
+
     // Per-session context — must be checked before the catch-all /api/sessions/:id
     const sessCtxMatch = p.match(/^\/api\/sessions\/([^/]+)\/context$/);
     if (sessCtxMatch) {

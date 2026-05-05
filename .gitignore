@@ -9,6 +9,18 @@ store/
 data/
 logs/
 
+# Per-user data (multi-user deployment side data)
+store-avhousehold/
+data-avhousehold/
+backups/
+
+# Local-only artifacts
+web-ui-legacy/
+web-ui-redesign-brief.md
+proxy/proxy-config.json
+.claude/scheduled_tasks.lock
+.env.*
+
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
 !groups/main/

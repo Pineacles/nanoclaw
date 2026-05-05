@@ -787,11 +787,13 @@ export function getSuccessfulRunCount(taskId: string): number {
 /**
  * Get all messages for a chat (including bot messages).
  * Used for chat history display where both sides of the conversation are needed.
+ * When `before` is provided (ISO timestamp), returns only messages older than that timestamp.
  */
 export function getChatMessages(
   chatJid: string,
   limit: number = 5000,
   sessionId?: string,
+  before?: string,
 ): Array<{
   id: string;
   sender_name: string;
@@ -801,16 +803,20 @@ export function getChatMessages(
   mood: string;
 }> {
   const sessionFilter = sessionId ? ' AND session_id = ?' : '';
+  const beforeFilter = before ? ' AND timestamp < ?' : '';
   const sql = `
     SELECT * FROM (
       SELECT id, sender_name, content, timestamp, is_bot_message, COALESCE(mood, 'chill') as mood
       FROM messages
-      WHERE chat_jid = ? AND content != '' AND content IS NOT NULL${sessionFilter}
+      WHERE chat_jid = ? AND content != '' AND content IS NOT NULL${sessionFilter}${beforeFilter}
       ORDER BY timestamp DESC
       LIMIT ?
     ) ORDER BY timestamp
   `;
-  const params = sessionId ? [chatJid, sessionId, limit] : [chatJid, limit];
+  const params: unknown[] = [chatJid];
+  if (sessionId) params.push(sessionId);
+  if (before) params.push(before);
+  params.push(limit);
   return db.prepare(sql).all(...params) as Array<{
     id: string;
     sender_name: string;

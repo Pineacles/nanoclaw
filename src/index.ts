@@ -12,6 +12,7 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   POLL_INTERVAL,
   TIMEZONE,
+  WHATSAPP_BURST_SETTLE_MS,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
@@ -118,6 +119,34 @@ function sweepMessageTriggers(): void {
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+/**
+ * Per-group debounce timers for WhatsApp message bursts.
+ * When a multi-image upload arrives as N separate messages, we wait
+ * WHATSAPP_BURST_SETTLE_MS of quiet before firing the agent so the agent
+ * sees the full batch instead of replying to the first message.
+ */
+const settleTimers = new Map<string, NodeJS.Timeout>();
+
+function isWhatsAppJid(jid: string): boolean {
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us');
+}
+
+function scheduleAgentInvocation(chatJid: string): void {
+  const settleMs = isWhatsAppJid(chatJid) ? WHATSAPP_BURST_SETTLE_MS : 0;
+  if (settleMs <= 0) {
+    queue.enqueueMessageCheck(chatJid);
+    return;
+  }
+  // Reset existing timer — new message arrived, restart the quiet window
+  const existing = settleTimers.get(chatJid);
+  if (existing) clearTimeout(existing);
+  const t = setTimeout(() => {
+    settleTimers.delete(chatJid);
+    queue.enqueueMessageCheck(chatJid);
+  }, settleMs);
+  settleTimers.set(chatJid, t);
+}
 
 // Populated early in start() — module-scope so spawnImpulse can read it.
 let WHATSAPP_BRIDGE_JIDS: string[] = [];
@@ -960,8 +989,9 @@ async function startMessageLoop(): Promise<void> {
           }
 
           // Don't pipe cross-session messages into a running container.
-          // Just enqueue — processGroupMessages will handle session grouping.
-          queue.enqueueMessageCheck(chatJid);
+          // For WhatsApp JIDs, debounce so multi-image bursts get bundled.
+          // For web JIDs, fires immediately (settleMs = 0).
+          scheduleAgentInvocation(chatJid);
         }
       }
     } catch (err) {

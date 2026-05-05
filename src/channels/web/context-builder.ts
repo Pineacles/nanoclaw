@@ -1179,7 +1179,7 @@ export function buildPerMessagePrefix(opts: {
     opts.userMessage ?? opts.messageHint ?? '',
   );
 
-  return `[System: ${parts.join('. ')}.]${topicContext}`;
+  return `<<<sys>>>[System: ${parts.join('. ')}.]<<<end-sys>>>${topicContext}`;
 }
 
 /**

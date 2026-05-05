@@ -19,6 +19,25 @@ export const ASSISTANT_HAS_OWN_NUMBER =
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
+/**
+ * Settle window for message bursts.
+ *
+ * WhatsApp sends each image / document in a separate message, so a multi-image
+ * upload arrives as N messages over ~1–3 seconds. Without batching, the agent
+ * fires on the first message and replies before the rest arrive.
+ *
+ * When new messages are detected for a WhatsApp JID, we wait this many ms of
+ * quiet (no further new messages) before invoking the agent. New arrivals
+ * during the window reset the timer.
+ *
+ * Set to 0 to disable (web sessions always pass 0 since they send one
+ * composed message at a time). Override via env: WHATSAPP_BURST_SETTLE_MS.
+ */
+export const WHATSAPP_BURST_SETTLE_MS = Math.max(
+  0,
+  parseInt(process.env.WHATSAPP_BURST_SETTLE_MS || '4000', 10) || 4000,
+);
+
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
 const HOME_DIR = process.env.HOME || os.homedir();
