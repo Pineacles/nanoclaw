@@ -507,12 +507,17 @@ function handleSessionMedia(
   url: URL,
   getMessages: ApiDeps['getMessages'],
 ): void {
-  const IMAGE_MARKER = /\[Image: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
-  const FILE_MARKER = /\[File: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
+  const IMAGE_MARKER =
+    /\[Image: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
+  const FILE_MARKER =
+    /\[File: (?:\/workspace\/group\/uploads\/|uploads\/)([^\]]+)\]/g;
   const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
 
   const rawLimit = parseInt(url.searchParams.get('limit') ?? '30', 10);
-  const mediaLimit = Math.min(isNaN(rawLimit) ? 30 : Math.max(1, rawLimit), 100);
+  const mediaLimit = Math.min(
+    isNaN(rawLimit) ? 30 : Math.max(1, rawLimit),
+    100,
+  );
   const before = url.searchParams.get('before') ?? undefined;
 
   // Use a large scan window to find enough media items — we'll cap after scanning.
@@ -566,7 +571,11 @@ export interface TaskProgressEvent {
 }
 
 export interface ApiDeps {
-  getMessages: (sessionId?: string, limit?: number, before?: string) => Array<{
+  getMessages: (
+    sessionId?: string,
+    limit?: number,
+    before?: string,
+  ) => Array<{
     id: string;
     sender_name: string;
     content: string;
@@ -619,7 +628,12 @@ export async function handleApiRoute(
     // Per-session media — must be checked before the catch-all /api/sessions/:id
     const sessMediaMatch = p.match(/^\/api\/sessions\/([^/]+)\/media$/);
     if (sessMediaMatch && method === 'GET') {
-      handleSessionMedia(res, decodeURIComponent(sessMediaMatch[1]), url, deps.getMessages);
+      handleSessionMedia(
+        res,
+        decodeURIComponent(sessMediaMatch[1]),
+        url,
+        deps.getMessages,
+      );
       return true;
     }
 

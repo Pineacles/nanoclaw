@@ -127,7 +127,12 @@ export function createWebChannel(opts: WebChannelOpts): Channel | null {
         getMessages: (sessionId?: string, limit?: number, before?: string) => {
           // Try persona pipeline first, fall back to plain pipeline
           const effectiveLimit = limit ?? 5000;
-          const msgs = getChatMessages(pipelineJid, effectiveLimit, sessionId, before);
+          const msgs = getChatMessages(
+            pipelineJid,
+            effectiveLimit,
+            sessionId,
+            before,
+          );
           if (msgs.length === 0 && sessionId) {
             return getChatMessages(plainJid, effectiveLimit, sessionId, before);
           }

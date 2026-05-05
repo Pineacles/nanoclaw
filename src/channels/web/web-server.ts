@@ -68,7 +68,11 @@ import {
 
 export interface WebServerOpts {
   onMessage: OnInboundMessage;
-  getMessages: (sessionId?: string, limit?: number, before?: string) => ReturnType<ApiDeps['getMessages']>;
+  getMessages: (
+    sessionId?: string,
+    limit?: number,
+    before?: string,
+  ) => ReturnType<ApiDeps['getMessages']>;
   runTaskNow?: (
     taskId: string,
     onProgress?: (event: import('./api-routes.js').TaskProgressEvent) => void,
